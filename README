@@ -1,0 +1,124 @@
+NAME
+    `Tickit::RenderContext' - efficiently render text and linedrawing on
+    Tickit windows
+
+SYNOPSIS
+     package Tickit::Widget::Something;
+     ...
+
+     sub render
+     {
+        my $self = shift;
+        my $win = $self->window or return;
+
+        my $rc = Tickit::RenderContext->new(
+           lines => $win->lines,
+           cols  => $win->cols,
+        );
+
+        $rc->text_at( 2, 2, "Hello, world!", $self->pen );
+
+        $rc->render_to_window( $win );
+     }
+
+DESCRIPTION
+    Provides a buffer of pending rendering operations to apply to a Window.
+    The buffer is modified by rendering operations performed by the widget,
+    and flushed to the widget's window when complete.
+
+    This provides the following advantages:
+
+    * Changes can be made in any order, and will be flushed in
+      top-to-bottom, left-to-right order, minimising cursor movements.
+
+    * Buffered content can be overwritten or partly erased once stored,
+      simplifying some styles of drawing operation.
+
+    * The buffer supports line-drawing, complete with merging of line
+      segments that meet in a character cell.
+
+    This code is still in the experiment stage. At some future point it may
+    be merged into the main Tickit distribution, and reimplemented in
+    efficient XS or C code.
+
+CONSTRUCTOR
+  $rc = Tickit::RenderContext->new( %args )
+    Returns a new instance of a `Tickit::RenderContext'.
+
+    Takes the following named arguments:
+
+    lines => INT
+    cols => INT
+            The size of the buffer area.
+
+METHODS
+  $lines = $rc->lines
+  $cols = $rc->cols
+    Returns the size of the buffer area
+
+  $rc->reset
+    Removes any pending changes and reverts the render context to its
+    default empty state.
+
+  $rc->clear( $pen )
+    A shortcut to calling `erase_at' for every line.
+
+  $rc->skip_at( $line, $col, $len )
+    Sets the range of cells given to a skipped state. No content will be
+    drawn here, nor will any content existing on the window be erased.
+
+    Initially, or after calling `reset', all cells are set to this state.
+
+  $rc->text_at( $line, $col, $text, $pen )
+    Sets the range of cells starting at the given position, to render the
+    given text in the given pen.
+
+  $rc->erase_at( $line, $col, $len, $pen )
+    Sets the range of cells given to erase with the given pen.
+
+  $rc->hline( $line, $startcol, $endcol, $style, $pen )
+    Draws a horizontal line between the given columns (both are inclusive),
+    in the given line style, with the given pen.
+
+    `$style' should be one of three exported constants:
+
+    * LINE_SINGLE
+        A single, thin line
+
+    * LINE_DOUBLE
+        A pair of double, thin lines
+
+    * LINE_THICK
+        A single, thick line
+
+  $rc->vline( $startline, $endline, $col, $style, $pen )
+    Draws a vertical line between the given lines (both are inclusive), in
+    the given line style, with the given pen. `$style' is as for `hline'.
+
+  $rc->render_to_window( $win )
+    Renders the stored content to the given Tickit::Window. After this, the
+    context will be cleared and reset back to initial state.
+
+TODO
+    As this code is still experimental, there are many planned features it
+    currently lacks:
+
+    * A `char_at' method to store a single Unicode character more
+      effiicently than a 1-column text cell. This may be useful for drawing
+      characters such as arrows and tick-marks.
+
+    * A virtual cursor position and pen state, to allow drawing in a
+      position-relative rather than absolute style.
+
+    * Clipping rectangle to support partial window updates
+
+    * Hole regions, to directly support shadows made by floating windows
+
+    * Child contexts, to support cascading render/expose logic down a window
+      tree
+
+    * Direct rendering to a Tickit::Term instead of a Window.
+
+AUTHOR
+    Paul Evans <leonerd@leonerd.org.uk>
+
