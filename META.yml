@@ -14,11 +14,11 @@ name: Tickit-RenderContext
 provides:
   Tickit::RenderContext:
     file: lib/Tickit/RenderContext.pm
-    version: 0.01
+    version: 0.02
 requires:
   Tickit::Pen: 0
   Tickit::Utils: 0
   perl: 5.010
 resources:
   license: http://dev.perl.org/licenses/
-version: 0.01
+version: 0.02

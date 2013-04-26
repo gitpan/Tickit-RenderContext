@@ -9,18 +9,29 @@ use strict;
 use warnings;
 use feature qw( switch );
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
+
+use Carp;
 
 use Tickit::Utils qw( textwidth substrwidth string_count );
 use Tickit::StringPos;
+use Tickit::Rect;
 
 # Exported API constants
 use Exporter 'import';
-our @EXPORT_OK = qw( LINE_SINGLE LINE_DOUBLE LINE_THICK );
+our @EXPORT_OK = qw(
+   LINE_SINGLE LINE_DOUBLE LINE_THICK
+   CAP_START CAP_END CAP_BOTH
+);
 use constant {
    LINE_SINGLE => 0x01,
    LINE_DOUBLE => 0x02,
    LINE_THICK  => 0x03,
+};
+use constant {
+   CAP_START => 0x01,
+   CAP_END   => 0x02,
+   CAP_BOTH  => 0x03,
 };
 
 # cell states
@@ -45,12 +56,14 @@ L<Tickit> windows
  sub render
  {
     my $self = shift;
+    my %args = @_;
     my $win = $self->window or return;
 
     my $rc = Tickit::RenderContext->new(
        lines => $win->lines,
        cols  => $win->cols,
     );
+    $rc->clip( $args{rect} );
 
     $rc->text_at( 2, 2, "Hello, world!", $self->pen );
 
@@ -75,18 +88,41 @@ left-to-right order, minimising cursor movements.
 =item *
 
 Buffered content can be overwritten or partly erased once stored, simplifying
-some styles of drawing operation.
+some styles of drawing operation. Large areas can be erased, and then redrawn
+with text or lines, without causing a double-drawing flicker on the output
+terminal.
 
 =item *
 
 The buffer supports line-drawing, complete with merging of line segments that
-meet in a character cell.
+meet in a character cell. Boxes, grids, and other shapes can be easily formed
+by drawing separate line segments, and the render context will handle the
+corners and other junctions formed.
+
+=back
+
+Drawing methods come in two forms; absolute, and cursor-relative:
+
+=over 2
+
+=item *
+
+Absolute methods, identified by their name having a suffixed C<_at>, operate
+on a position within the buffer specified by their argument.
+
+=item *
+
+Cursor-relative methods, identified by their lack of C<_at> suffix, operate at
+and update the position of the "virtual cursor". This is a position within the
+buffer that can be set using the C<goto> method. The position of the virtual
+cursor is not affected by the absolute-position methods.
 
 =back
 
 This code is still in the experiment stage. At some future point it may be
 merged into the main L<Tickit> distribution, and reimplemented in efficient XS
-or C code.
+or C code. As such, recommendations and best-practices are still subject to
+change and evolution as the code progresses.
 
 =cut
 
@@ -125,13 +161,17 @@ sub new
    my $class = shift;
    my %args = @_;
 
+   my $lines = $args{lines};
+   my $cols  = $args{cols};
+
    my $self = bless {
-      lines => my $lines = $args{lines},
-      cols  => my $cols  = $args{cols},
+      lines => $lines,
+      cols  => $cols,
       pens  => [],
       texts => [],
    }, $class;
 
+   $self->clip( undef );
    $self->reset;
 
    return $self;
@@ -152,10 +192,42 @@ Returns the size of the buffer area
 sub lines { shift->{lines} }
 sub cols  { shift->{cols} }
 
+=head2 $rc->clip( $rect )
+
+Sets a L<Tickit::Rect> rectangle to clip operations to. This will apply to
+subsequent rendering operations but does not affect existing content, nor the
+actual rendering to the window. Clipping rectangles are not cumulative; each
+call sets a new rectangle, replacing the previous.
+
+Pass C<undef> to remove the clipping rectangle.
+
+=cut
+
+sub clip
+{
+   my $self = shift;
+   my ( $rect ) = @_;
+
+   my $top    = 0; $top    = $rect->top    if $rect and $rect->top    > $top;
+   my $left   = 0; $left   = $rect->left   if $rect and $rect->left   > $left;
+
+   my $bottom = $self->lines; $bottom = $rect->bottom if $rect and $rect->bottom < $bottom;
+   my $right  = $self->cols;  $right  = $rect->right  if $rect and $rect->right  < $right;
+
+   $self->{clip} = Tickit::Rect->new(
+      top    => $top,
+      left   => $left,
+      bottom => $bottom,
+      right  => $right,
+   );
+}
+
 =head2 $rc->reset
 
 Removes any pending changes and reverts the render context to its default
-empty state.
+empty state, and undefines the virtual cursor position.
+
+This method does not change the clipping rectangle.
 
 =cut
 
@@ -169,6 +241,9 @@ sub reset
 
    $self->{pens} = [];
    $self->{texts} = [];
+
+   undef $self->{line};
+   undef $self->{col};
 }
 
 sub _empty_span
@@ -234,6 +309,8 @@ sub _push_pen
    my $self = shift;
    my ( $pen ) = @_;
 
+   $pen->isa( "Tickit::Pen" ) or croak "Expected a pen";
+
    $self->{pens}[$_] == $pen and return $_ for 0 .. $#{ $self->{pens} };
 
    push @{ $self->{pens} }, $pen;
@@ -244,6 +321,7 @@ sub _push_pen
 
 =head2 $rc->clear( $pen )
 
+Resets every cell in the buffer to an erased state. 
 A shortcut to calling C<erase_at> for every line.
 
 =cut
@@ -261,6 +339,18 @@ sub clear
    foreach my $line ( 0 .. $self->lines - 1 ) {
       $self->erase_at( $line, 0, $self->cols, $pen );
    }
+}
+
+=head2 $rc->goto( $line, $col )
+
+Sets the position of the virtual cursor.
+
+=cut
+
+sub goto
+{
+   my $self = shift;
+   @{$self}{qw( line col )} = @_;
 }
 
 =head2 $rc->skip_at( $line, $col, $len )
@@ -290,26 +380,60 @@ sub skip_at
    $cells->[$line][$_]   = ContCell( $col ) for $col+1 .. $col+$len-1;
 }
 
-=head2 $rc->text_at( $line, $col, $text, $pen )
+=head2 $rc->skip( $len )
 
-Sets the range of cells starting at the given position, to render the given
-text in the given pen.
+Sets the range of cells at the virtual cursor position to a skipped state, and
+updates the position.
 
 =cut
 
-sub text_at
+sub skip
 {
    my $self = shift;
-   my ( $line, $col, $text, $pen ) = @_;
+   my ( $len ) = @_;
+   defined $self->{line} or croak "Cannot ->skip without a virtual cursor position";
+   $self->skip_at( $self->{line}, $self->{col}, $len );
+   $self->{col} += $len;
+}
 
-   return if $line < 0 or $line >= $self->lines or $col >= $self->cols;
+=head2 $rc->skip_to( $col )
 
-   my $len = textwidth( $text );
+Sets the range of cells from the virtual cursor position until before the
+given column to a skipped state, and updates the position to the column.
+
+If the position is already past this column then the cursor is moved backwards
+and no buffer changes are made.
+
+=cut
+
+sub skip_to
+{
+   my $self = shift;
+   my ( $col ) = @_;
+   defined $self->{line} or croak "Cannot ->skip_to without a virtual cursor position";
+
+   if( $self->{col} < $col ) {
+      $self->skip_at( $self->{line}, $self->{col}, $col - $self->{col} );
+   }
+
+   $self->{col} = $col;
+}
+
+sub _text_at
+{
+   my $self = shift;
+   my ( $line, $col, $text, $len, $pen ) = @_;
+
+   my $clip = $self->{clip};
+
+   return if $line < $clip->top or
+             $line >= $clip->bottom or
+             $col >= $clip->right;
 
    my $startcol = 0;
-   $len += $col, $startcol -= $col, $col = 0 if $col < 0;
+   $len += $col - $clip->left, $startcol -= $col - $clip->left, $col = $clip->left if $col < $clip->left;
    return if $len <= 0;
-   $len = $self->cols - $col if $len > $self->cols - $col;
+   $len = $clip->right - $col if $len > $clip->right - $col;
 
    my $cells = $self->{cells};
 
@@ -324,6 +448,37 @@ sub text_at
    $cells->[$line][$_]   = ContCell( $col ) for $col+1 .. $col+$len-1;
 }
 
+=head2 $rc->text_at( $line, $col, $text, $pen )
+
+Sets the range of cells starting at the given position, to render the given
+text in the given pen.
+
+=cut
+
+sub text_at
+{
+   my $self = shift;
+   my ( $line, $col, $text, $pen ) = @_;
+   $self->_text_at( $line, $col, $text, textwidth( $text ), $pen );
+}
+
+=head2 $rc->text( $text, $pen )
+
+Sets the range of cells at the virtual cursor position to render the given
+text in the given pen, and updates the position.
+
+=cut
+
+sub text
+{
+   my $self = shift;
+   my ( $text, $pen ) = @_;
+   defined $self->{line} or croak "Cannot ->text without a virtual cursor position";
+   my $len = textwidth( $text );
+   $self->_text_at( $self->{line}, $self->{col}, $text, $len, $pen );
+   $self->{col} += $len;
+}
+
 =head2 $rc->erase_at( $line, $col, $len, $pen )
 
 Sets the range of cells given to erase with the given pen.
@@ -335,10 +490,15 @@ sub erase_at
    my $self = shift;
    my ( $line, $col, $len, $pen ) = @_;
 
-   return if $line < 0 or $line >= $self->lines or $col >= $self->cols;
-   $len += $col, $col = 0 if $col < 0;
+   my $clip = $self->{clip};
+
+   return if $line < $clip->top or
+             $line >= $clip->bottom or
+             $col >= $clip->right;
+
+   $len += $col - $clip->left, $col = $clip->left if $col < $clip->left;
    return if $len <= 0;
-   $len = $self->cols - $col if $len > $self->cols - $col;
+   $len = $clip->right - $col if $len > $clip->right - $col;
 
    my $cells = $self->{cells};
 
@@ -350,7 +510,127 @@ sub erase_at
    $cells->[$line][$_]   = ContCell( $col ) for $col+1 .. $col+$len-1;
 }
 
-# Line drawing
+=head2 $rc->erase( $len, $pen )
+
+Sets the range of cells at the virtual cursor position to erase with the given
+pen, and updates the position.
+
+=cut
+
+sub erase
+{
+   my $self = shift;
+   my ( $len, $pen ) = @_;
+   defined $self->{line} or croak "Cannot ->erase without a virtual cursor position";
+   $self->erase_at( $self->{line}, $self->{col}, $len, $pen );
+   $self->{col} += $len;
+}
+
+=head2 $rc->erase_to( $col, $pen )
+
+Sets the range of cells from the virtual cursor position until before the
+given column to erase with the given pen, and updates the position to the
+column.
+
+If the position is already past this column then the cursor is moved backwards
+and no buffer changes are made.
+
+=cut
+
+sub erase_to
+{
+   my $self = shift;
+   my ( $col, $pen ) = @_;
+   defined $self->{line} or croak "Cannot ->erase_to without a virtual cursor position";
+
+   if( $self->{col} < $col ) {
+      $self->erase_at( $self->{line}, $self->{col}, $col - $self->{col}, $pen );
+   }
+
+   $self->{col} = $col;
+}
+
+=head1 LINE DRAWING
+
+The render context buffer supports storing line-drawing characters in cells,
+and can merge line segments where they meet, attempting to draw the correct
+character for the segments that meet in each cell.
+
+There are three exported constants giving supported styles of line drawing:
+
+=over 4
+
+=item * LINE_SINGLE
+
+A single, thin line
+
+=item * LINE_DOUBLE
+
+A pair of double, thin lines
+
+=item * LINE_THICK
+
+A single, thick line
+
+=back
+
+Note that linedrawing is performed by Unicode characters, and not every
+possible combination of line segments of differing styles meeting in a cell is
+supported by Unicode. The following sets of styles may be relied upon:
+
+=over 4
+
+=item *
+
+Any possible combination of only C<SINGLE> segments, C<THICK> segments, or
+both.
+
+=item *
+
+Any combination of only C<DOUBLE> segments, except cells that only have one of
+the four borders occupied.
+
+=item *
+
+Any combination of C<SINGLE> and C<DOUBLE> segments except where the style
+changes between C<SINGLE> to C<DOUBLE> on a vertical or horizontal run.
+
+=back
+
+Other combinations are not directly supported (i.e. any combination of
+C<DOUBLE> and C<THICK> in the same cell, or any attempt to change from
+C<SINGLE> to C<DOUBLE> in either the vertical or horizontal direction). To
+handle these cases, a cell may be rendered with a substitution character which
+replaces a C<DOUBLE> or C<THICK> segment with a C<SINGLE> one within that
+cell. The effect will be the overall shape of the line is retained, but close
+to the edge or corner it will have the wrong segment type.
+
+Conceptually, every cell involved in line drawing has a potential line segment
+type at each of its four borders to its neighbours. Horizontal lines are drawn
+though the vertical centre of each cell, and vertical lines are drawn through
+the horizontal centre.
+
+There is a choice of how to handle the ends of line segments, as to whether
+the segment should go to the centre of each cell, or should continue through
+the entire body of the cell and stop at the boundary. By default line segments
+will start and end at the centre of the cells, so that horizontal and vertical
+lines meeting in a cell will form a neat corner. When drawing isolated lines
+such as horizontal or vertical rules, it is preferrable that the line go right
+through the cells at the start and end. To control this behaviour, the
+C<$caps> bitmask is used. C<CAP_START> and C<CAP_END> state that the line
+should consume the whole of the start or end cell, respectively; C<CAP_BOTH>
+is a convenient shortcut specifying both behaviours.
+
+A rectangle may be formed by combining two C<hline_at> and two C<vline_at>
+calls, without end caps:
+
+ $rc->hline_at( $top,    $left, $right, $style, $pen );
+ $rc->hline_at( $bottom, $left, $right, $style, $pen );
+ $rc->vline_at( $top, $bottom, $left,  $style, $pen );
+ $rc->vline_at( $top, $bottom, $right, $style, $pen );
+
+=cut
+
 # Various parts of this code borrowed from Tom Molesworth's Tickit::Canvas
 
 # Bitmasks on Cell linemask
@@ -386,21 +666,46 @@ use constant {
 
 my @linechars;
 {
-   my $char;
    while( <DATA> ) {
       chomp;
-      my $spec;
-      if( m/=>/ ) {
-         ( $char, $spec ) = split( m/\s+=>\s+/, $_, 2 );
-      }
-      else {
-         $spec = $_;
-      }
+      my ( $char, $spec ) = split( m/\s+=>\s+/, $_, 2 );
 
       my $mask = 0;
       $mask |= __PACKAGE__->$_ for $spec =~ m/([A-Z_]+)/g;
 
       $linechars[$mask] = $char;
+   }
+
+   # Fill in the gaps
+   foreach my $mask ( 1 .. 255 ) {
+      next if defined $linechars[$mask];
+
+      # Try with SINGLE instead of THICK, so mask away 0xAA
+      if( my $char = $linechars[$mask & 0xAA] ) {
+         $linechars[$mask] = $char;
+         next;
+      }
+
+      # The only ones left now are awkward mixes of single/double
+      # Turn DOUBLE into SINGLE
+      my $singlemask = $mask;
+      foreach my $dir (qw( NORTH EAST SOUTH WEST )) {
+         my $dirmask = __PACKAGE__->$dir;
+         my $dirshift = __PACKAGE__->${\"${dir}_SHIFT"};
+
+         my $dirsingle = LINE_SINGLE << $dirshift;
+         my $dirdouble = LINE_DOUBLE << $dirshift;
+
+         $singlemask = ( $singlemask & ~$dirmask ) | $dirsingle
+            if ( $singlemask & $dirmask ) == $dirdouble;
+      }
+
+      if( my $char = $linechars[$singlemask] ) {
+         $linechars[$mask] = $char;
+         next;
+      }
+
+      die sprintf "TODO: Couldn't find a linechar for %02x\n", $mask;
    }
 }
 
@@ -409,7 +714,12 @@ sub linecell
    my $self = shift;
    my ( $line, $col, $bits, $pen ) = @_;
 
-   return if $line < 0 or $line >= $self->lines or $col < 0 or $col >= $self->cols;
+   my $clip = $self->{clip};
+
+   return if $line < $clip->top or
+             $line >= $clip->bottom or
+             $col < $clip->left or
+             $col >= $clip->right;
 
    my $penidx = $self->_push_pen( $pen );
 
@@ -428,62 +738,51 @@ sub linecell
    $cell->linemask |= $bits;
 }
 
-=head2 $rc->hline( $line, $startcol, $endcol, $style, $pen )
+=head2 $rc->hline_at( $line, $startcol, $endcol, $style, $pen, $caps )
 
 Draws a horizontal line between the given columns (both are inclusive), in the
 given line style, with the given pen.
 
-C<$style> should be one of three exported constants:
-
-=over 4
-
-=item * LINE_SINGLE
-
-A single, thin line
-
-=item * LINE_DOUBLE
-
-A pair of double, thin lines
-
-=item * LINE_THICK
-
-A single, thick line
-
-=back
-
 =cut
 
-sub hline
+sub hline_at
 {
    my $self = shift;
-   my ( $line, $startcol, $endcol, $style, $pen ) = @_;
+   my ( $line, $startcol, $endcol, $style, $pen, $caps ) = @_;
+   $caps ||= 0;
 
    # TODO: _empty_span first for efficiency
+   my $east = $style << EAST_SHIFT;
+   my $west = $style << WEST_SHIFT;
 
-   $self->linecell( $line, $startcol, $style << EAST_SHIFT, $pen );
+   $self->linecell( $line, $startcol, $east | ($caps & CAP_START ? $west : 0), $pen );
    foreach my $col ( $startcol+1 .. $endcol-1 ) {
-      $self->linecell( $line, $col, $style << EAST_SHIFT | $style << WEST_SHIFT, $pen );
+      $self->linecell( $line, $col, $east | $west, $pen );
    }
-   $self->linecell( $line, $endcol, $style << WEST_SHIFT, $pen );
+   $self->linecell( $line, $endcol, $west | ($caps & CAP_END ? $east : 0), $pen );
 }
 
-=head2 $rc->vline( $startline, $endline, $col, $style, $pen )
+=head2 $rc->vline_at( $startline, $endline, $col, $style, $pen, $caps )
 
-Draws a vertical line between the given lines (both are inclusive), in the
-given line style, with the given pen. C<$style> is as for C<hline>.
+Draws a vertical line between the centres of the given lines (both are
+inclusive), in the given line style, with the given pen.
 
 =cut
 
-sub vline
+sub vline_at
 {
    my $self = shift;
-   my ( $startline, $endline, $col, $style, $pen ) = @_;
+   my ( $startline, $endline, $col, $style, $pen, $caps ) = @_;
+   $caps ||= 0;
 
-   $self->linecell( $startline, $col, $style << SOUTH_SHIFT, $pen );
+   my $south = $style << SOUTH_SHIFT;
+   my $north = $style << NORTH_SHIFT;
+
+   $self->linecell( $startline, $col, $south | ($caps & CAP_START ? $north : 0), $pen );
    foreach my $line ( $startline+1 .. $endline-1 ) {
-      $self->linecell( $line, $col, $style << NORTH_SHIFT | $style << SOUTH_SHIFT, $pen );
+      $self->linecell( $line, $col, $north | $south, $pen );
    }
-   $self->linecell( $endline, $col, $style << NORTH_SHIFT, $pen );
+   $self->linecell( $endline, $col, $north | ($caps & CAP_END ? $south : 0), $pen );
 }
 
 =head2 $rc->render_to_window( $win )
@@ -522,23 +821,31 @@ sub render_to_window
             when( ERASE ) {
                my $pen = $self->{pens}[$cell->penidx];
                if( $col + $cell->len < $self->cols ) {
-                  $phycol += $win->erase( $cell->len, $pen, 1 )->columns;
+                  $phycol += $win->erasech( $cell->len, 1, $pen )->columns;
                }
                else {
-                  $win->erase( $cell->len, $pen );
+                  $win->erasech( $cell->len, undef, $pen );
                   undef $phycol;
                }
             }
             when( LINE ) {
-               my $pen = $self->{pens}[$cell->penidx];
-               my $linemask = $cell->linemask;
-               my $char = $linechars[$linemask];
-               if( defined $char ) {
-                  $phycol += $win->print( $char, $pen )->columns;
+               # This is more efficient and works better with unit testing in
+               # the Perl case but in the C version this is easier just done a
+               # cell at a time
+               my $penidx = $cell->penidx;
+               my $chars = "";
+               while( $col < $self->cols and
+                      $cell = $cells->[$line][$col] and
+                      $cell->state == LINE and
+                      $cell->penidx == $penidx ) {
+                  $chars .= $linechars[$cell->linemask];
+                  $col++;
                }
-               else {
-                  printf STDERR "TODO: pen linemask %02x\n", $linemask;
-               }
+
+               my $pen = $self->{pens}[$penidx];
+               $phycol += $win->print( $chars, $pen )->columns;
+
+               next;
             }
             default {
                die "TODO: cell in state ". $cell->state;
@@ -567,20 +874,16 @@ and tick-marks.
 
 =item *
 
-A virtual cursor position and pen state, to allow drawing in a
-position-relative rather than absolute style.
+Consider if the virtual-cursor methods should use a stored pen rather than
+passing each time.
 
 =item *
 
-Clipping rectangle to support partial window updates
+Hole regions, to directly support shadows made by floating windows.
 
 =item *
 
-Hole regions, to directly support shadows made by floating windows
-
-=item *
-
-Child contexts, to support cascading render/expose logic down a window tree
+Child contexts, to support cascading render/expose logic down a window tree.
 
 =item *
 
@@ -695,9 +998,7 @@ __DATA__
 ╨ => WEST_SINGLE | NORTH_DOUBLE | EAST_SINGLE
 ╩ => WEST_DOUBLE | NORTH_DOUBLE | EAST_DOUBLE
 ╪ => WEST_DOUBLE | NORTH_SINGLE | EAST_DOUBLE | SOUTH_SINGLE
-     WEST_DOUBLE | NORTH_THICK  | EAST_DOUBLE | SOUTH_THICK
 ╫ => WEST_SINGLE | NORTH_DOUBLE | EAST_SINGLE | SOUTH_DOUBLE
-     WEST_THICK  | NORTH_DOUBLE | EAST_THICK  | SOUTH_DOUBLE
 ╬ => WEST_DOUBLE | NORTH_DOUBLE | EAST_DOUBLE | SOUTH_DOUBLE
 ╴ => WEST_SINGLE
 ╵ => NORTH_SINGLE

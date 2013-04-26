@@ -9,12 +9,14 @@ SYNOPSIS
      sub render
      {
         my $self = shift;
+        my %args = @_;
         my $win = $self->window or return;
 
         my $rc = Tickit::RenderContext->new(
            lines => $win->lines,
            cols  => $win->cols,
         );
+        $rc->clip( $args{rect} );
 
         $rc->text_at( 2, 2, "Hello, world!", $self->pen );
 
@@ -32,14 +34,30 @@ DESCRIPTION
       top-to-bottom, left-to-right order, minimising cursor movements.
 
     * Buffered content can be overwritten or partly erased once stored,
-      simplifying some styles of drawing operation.
+      simplifying some styles of drawing operation. Large areas can be
+      erased, and then redrawn with text or lines, without causing a
+      double-drawing flicker on the output terminal.
 
     * The buffer supports line-drawing, complete with merging of line
-      segments that meet in a character cell.
+      segments that meet in a character cell. Boxes, grids, and other shapes
+      can be easily formed by drawing separate line segments, and the render
+      context will handle the corners and other junctions formed.
+
+    Drawing methods come in two forms; absolute, and cursor-relative:
+
+    * Absolute methods, identified by their name having a suffixed `_at',
+      operate on a position within the buffer specified by their argument.
+
+    * Cursor-relative methods, identified by their lack of `_at' suffix,
+      operate at and update the position of the "virtual cursor". This is a
+      position within the buffer that can be set using the `goto' method.
+      The position of the virtual cursor is not affected by the
+      absolute-position methods.
 
     This code is still in the experiment stage. At some future point it may
     be merged into the main Tickit distribution, and reimplemented in
-    efficient XS or C code.
+    efficient XS or C code. As such, recommendations and best-practices are
+    still subject to change and evolution as the code progresses.
 
 CONSTRUCTOR
   $rc = Tickit::RenderContext->new( %args )
@@ -56,12 +74,26 @@ METHODS
   $cols = $rc->cols
     Returns the size of the buffer area
 
+  $rc->clip( $rect )
+    Sets a Tickit::Rect rectangle to clip operations to. This will apply to
+    subsequent rendering operations but does not affect existing content,
+    nor the actual rendering to the window. Clipping rectangles are not
+    cumulative; each call sets a new rectangle, replacing the previous.
+
+    Pass `undef' to remove the clipping rectangle.
+
   $rc->reset
     Removes any pending changes and reverts the render context to its
-    default empty state.
+    default empty state, and undefines the virtual cursor position.
+
+    This method does not change the clipping rectangle.
 
   $rc->clear( $pen )
-    A shortcut to calling `erase_at' for every line.
+    Resets every cell in the buffer to an erased state. A shortcut to
+    calling `erase_at' for every line.
+
+  $rc->goto( $line, $col )
+    Sets the position of the virtual cursor.
 
   $rc->skip_at( $line, $col, $len )
     Sets the range of cells given to a skipped state. No content will be
@@ -69,18 +101,48 @@ METHODS
 
     Initially, or after calling `reset', all cells are set to this state.
 
+  $rc->skip( $len )
+    Sets the range of cells at the virtual cursor position to a skipped
+    state, and updates the position.
+
+  $rc->skip_to( $col )
+    Sets the range of cells from the virtual cursor position until before
+    the given column to a skipped state, and updates the position to the
+    column.
+
+    If the position is already past this column then the cursor is moved
+    backwards and no buffer changes are made.
+
   $rc->text_at( $line, $col, $text, $pen )
     Sets the range of cells starting at the given position, to render the
     given text in the given pen.
 
+  $rc->text( $text, $pen )
+    Sets the range of cells at the virtual cursor position to render the
+    given text in the given pen, and updates the position.
+
   $rc->erase_at( $line, $col, $len, $pen )
     Sets the range of cells given to erase with the given pen.
 
-  $rc->hline( $line, $startcol, $endcol, $style, $pen )
-    Draws a horizontal line between the given columns (both are inclusive),
-    in the given line style, with the given pen.
+  $rc->erase( $len, $pen )
+    Sets the range of cells at the virtual cursor position to erase with the
+    given pen, and updates the position.
 
-    `$style' should be one of three exported constants:
+  $rc->erase_to( $col, $pen )
+    Sets the range of cells from the virtual cursor position until before
+    the given column to erase with the given pen, and updates the position
+    to the column.
+
+    If the position is already past this column then the cursor is moved
+    backwards and no buffer changes are made.
+
+LINE DRAWING
+    The render context buffer supports storing line-drawing characters in
+    cells, and can merge line segments where they meet, attempting to draw
+    the correct character for the segments that meet in each cell.
+
+    There are three exported constants giving supported styles of line
+    drawing:
 
     * LINE_SINGLE
         A single, thin line
@@ -91,9 +153,61 @@ METHODS
     * LINE_THICK
         A single, thick line
 
-  $rc->vline( $startline, $endline, $col, $style, $pen )
-    Draws a vertical line between the given lines (both are inclusive), in
-    the given line style, with the given pen. `$style' is as for `hline'.
+    Note that linedrawing is performed by Unicode characters, and not every
+    possible combination of line segments of differing styles meeting in a
+    cell is supported by Unicode. The following sets of styles may be relied
+    upon:
+
+    *   Any possible combination of only `SINGLE' segments, `THICK'
+        segments, or both.
+
+    *   Any combination of only `DOUBLE' segments, except cells that only
+        have one of the four borders occupied.
+
+    *   Any combination of `SINGLE' and `DOUBLE' segments except where the
+        style changes between `SINGLE' to `DOUBLE' on a vertical or
+        horizontal run.
+
+    Other combinations are not directly supported (i.e. any combination of
+    `DOUBLE' and `THICK' in the same cell, or any attempt to change from
+    `SINGLE' to `DOUBLE' in either the vertical or horizontal direction). To
+    handle these cases, a cell may be rendered with a substitution character
+    which replaces a `DOUBLE' or `THICK' segment with a `SINGLE' one within
+    that cell. The effect will be the overall shape of the line is retained,
+    but close to the edge or corner it will have the wrong segment type.
+
+    Conceptually, every cell involved in line drawing has a potential line
+    segment type at each of its four borders to its neighbours. Horizontal
+    lines are drawn though the vertical centre of each cell, and vertical
+    lines are drawn through the horizontal centre.
+
+    There is a choice of how to handle the ends of line segments, as to
+    whether the segment should go to the centre of each cell, or should
+    continue through the entire body of the cell and stop at the boundary.
+    By default line segments will start and end at the centre of the cells,
+    so that horizontal and vertical lines meeting in a cell will form a neat
+    corner. When drawing isolated lines such as horizontal or vertical
+    rules, it is preferrable that the line go right through the cells at the
+    start and end. To control this behaviour, the `$caps' bitmask is used.
+    `CAP_START' and `CAP_END' state that the line should consume the whole
+    of the start or end cell, respectively; `CAP_BOTH' is a convenient
+    shortcut specifying both behaviours.
+
+    A rectangle may be formed by combining two `hline_at' and two `vline_at'
+    calls, without end caps:
+
+     $rc->hline_at( $top,    $left, $right, $style, $pen );
+     $rc->hline_at( $bottom, $left, $right, $style, $pen );
+     $rc->vline_at( $top, $bottom, $left,  $style, $pen );
+     $rc->vline_at( $top, $bottom, $right, $style, $pen );
+
+  $rc->hline_at( $line, $startcol, $endcol, $style, $pen, $caps )
+    Draws a horizontal line between the given columns (both are inclusive),
+    in the given line style, with the given pen.
+
+  $rc->vline_at( $startline, $endline, $col, $style, $pen, $caps )
+    Draws a vertical line between the centres of the given lines (both are
+    inclusive), in the given line style, with the given pen.
 
   $rc->render_to_window( $win )
     Renders the stored content to the given Tickit::Window. After this, the
@@ -107,15 +221,13 @@ TODO
       effiicently than a 1-column text cell. This may be useful for drawing
       characters such as arrows and tick-marks.
 
-    * A virtual cursor position and pen state, to allow drawing in a
-      position-relative rather than absolute style.
+    * Consider if the virtual-cursor methods should use a stored pen rather
+      than passing each time.
 
-    * Clipping rectangle to support partial window updates
-
-    * Hole regions, to directly support shadows made by floating windows
+    * Hole regions, to directly support shadows made by floating windows.
 
     * Child contexts, to support cascading render/expose logic down a window
-      tree
+      tree.
 
     * Direct rendering to a Tickit::Term instead of a Window.
 

@@ -1,4 +1,7 @@
 Revision history for Tickit-RenderContext
 
+0.02    CHANGES:
+         * Remembered to update workdir before packing distrubtion.
+
 0.01    First version, released on an unsuspecting world.
 

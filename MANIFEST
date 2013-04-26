@@ -1,5 +1,6 @@
 Build.PL
 Changes
+examples/demo-lines.pl
 lib/Tickit/RenderContext.pm
 LICENSE
 Makefile.PL
@@ -9,5 +10,6 @@ META.yml
 README
 t/00use.t
 t/01rc.t
-t/02line.t
+t/02clipping.t
+t/03line.t
 t/99pod.t

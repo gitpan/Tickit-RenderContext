@@ -29,7 +29,7 @@ my @methods;
    sub print { shift; push @methods, [ print => $_[0], { $_[1]->getattrs } ];
                string_count( $_[0], my $pos = Tickit::StringPos->zero );
                return $pos; }
-   sub erase { shift; push @methods, [ erase => $_[0], { $_[1]->getattrs }, $_[2] ];
+   sub erasech { shift; push @methods, [ erasech => $_[0], $_[1], { $_[2]->getattrs } ];
                return Tickit::StringPos->limit_columns( $_[0] ); }
 }
 my $win = bless [], "TestWindow";
@@ -74,6 +74,20 @@ my $win = bless [], "TestWindow";
               ],
               'RC renders overwritten text' );
    undef @methods;
+
+   $rc->goto( 4, 2 );
+   $rc->text( "Text in ", Tickit::Pen->new );
+   $rc->text( "bold", Tickit::Pen->new( b => 1 ) );
+
+   $rc->render_to_window( $win );
+   is_deeply( \@methods,
+              [
+                 [ goto => 4, 2 ],
+                 [ print => "Text in ", {} ],
+                 [ print => "bold", { b => 1 } ],
+              ],
+              'RC text with virtual-cursor' );
+   undef @methods;
 }
 
 # Erase
@@ -82,15 +96,30 @@ my $win = bless [], "TestWindow";
    $rc->erase_at( 0, 5, 10, Tickit::Pen->new( fg => 5, b => 1 ) );
 
    $rc->render_to_window( $win );
-
    is_deeply( \@methods,
               [
                  [ goto => 0, 0 ],
-                 [ erase =>  5, { fg => 5         }, 1 ],
-                 [ erase => 10, { fg => 5, b => 1 }, 1 ],
-                 [ erase =>  5, { fg => 5         }, undef ],
+                 [ erasech =>  5, 1,     { fg => 5         } ],
+                 [ erasech => 10, 1,     { fg => 5, b => 1 } ],
+                 [ erasech =>  5, undef, { fg => 5         } ],
               ],
               'RC renders erase' );
+   undef @methods;
+
+   $rc->goto( 2, 6 );
+   $rc->erase( 12, Tickit::Pen->new( u => 1 ) );
+   $rc->goto( 3, 12 );
+   $rc->erase_to( 16, Tickit::Pen->new( i => 1 ) );
+
+   $rc->render_to_window( $win );
+   is_deeply( \@methods,
+              [
+                 [ goto => 2, 6 ],
+                 [ erasech => 12, 1, { u => 1 } ],
+                 [ goto => 3, 12 ],
+                 [ erasech => 4, 1, { i => 1 } ],
+              ],
+              'RC erase with virtual-cursor' );
    undef @methods;
 }
 
@@ -99,51 +128,59 @@ my $win = bless [], "TestWindow";
    $rc->clear( Tickit::Pen->new( bg => 3 ) );
 
    $rc->render_to_window( $win );
-
    is_deeply( \@methods,
               [
                ( map {
                  [ goto => $_, 0 ],
-                 [ erase => 20, { bg => 3 }, undef ] } 0 .. 9 )
+                 [ erasech => 20, undef, { bg => 3 } ] } 0 .. 9 )
               ],
               'RC renders clear' );
    undef @methods;
 }
 
-# Clipping
+# Skipping
 {
    my $pen = Tickit::Pen->new;
 
-   $rc->text_at( -1, 5, "TTTTTTTTTT", $pen );
-   $rc->text_at( 11, 5, "BBBBBBBBBB", $pen );
-   $rc->text_at( 4, -3, "LLLLLLLLLL", $pen );
-   $rc->text_at( 5, 15, "RRRRRRRRRR", $pen );
+   $rc->text_at( 6, 1, "This will be skipped", $pen );
+   $rc->skip_at( 6, 10, 4 );
+
+   $rc->erase_at( 7, 5, 15, $pen );
+   $rc->skip_at( 7, 10, 2 );
 
    $rc->render_to_window( $win );
    is_deeply( \@methods,
               [
-                 [ goto => 4, 0 ],
-                 [ print => "LLLLLLL", {} ],
-                 [ goto => 5, 15 ],
-                 [ print => "RRRRR", {} ],
+                 [ goto => 6, 1 ],
+                 [ print => "This will", {} ],
+                 [ goto => 6, 14 ],
+                 [ print => "skippe", {} ],
+                 [ goto => 7, 5 ],
+                 [ erasech => 5, 1, {} ],
+                 [ goto => 7, 12 ],
+                 [ erasech => 8, undef, {} ],
               ],
-              'RC text rendering with clipping' );
+              'RC skipping' );
    undef @methods;
 
-   $rc->erase_at( -1, 5, 10, Tickit::Pen->new( fg => 1 ) );
-   $rc->erase_at( 11, 5, 10, Tickit::Pen->new( fg => 2 ) );
-   $rc->erase_at( 4, -3, 10, Tickit::Pen->new( fg => 3 ) );
-   $rc->erase_at( 5, 15, 10, Tickit::Pen->new( fg => 4 ) );
+   $rc->goto( 8, 0 );
+   $rc->text( "Some", $pen );
+   $rc->skip( 2 );
+   $rc->text( "more", $pen );
+   $rc->skip_to( 14 );
+   $rc->text( "14", $pen );
 
    $rc->render_to_window( $win );
    is_deeply( \@methods,
               [
-                 [ goto => 4, 0 ],
-                 [ erase => 7, { fg => 3 }, 1 ], # TODO: this 1 should not be here
-                 [ goto => 5, 15 ],
-                 [ erase => 5, { fg => 4 }, undef ],
+                 [ goto => 8, 0 ],
+                 [ print => "Some", {} ],
+                 [ goto => 8, 6 ],
+                 [ print => "more", {} ],
+                 [ goto => 8, 14 ],
+                 [ print => "14", {} ],
               ],
-              'RC text rendering with clipping' );
+              'RC skipping at virtual-cursor' );
    undef @methods;
 }
 
