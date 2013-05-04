@@ -6,8 +6,8 @@ use Module::Build;
 my $build = Module::Build->new(
    module_name => 'Tickit::RenderContext',
    requires => {
-      'Tickit::Pen' => 0,
-      'Tickit::Utils' => 0,
+      'Tickit::Pen' => '0.29', # immutable
+      'Tickit::Utils' => '0.21', # string_count
       'perl' => '5.010', # switch
    },
    build_requires => {

@@ -9,13 +9,15 @@ use strict;
 use warnings;
 use feature qw( switch );
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use Carp;
+use Scalar::Util qw( refaddr );
 
 use Tickit::Utils qw( textwidth substrwidth string_count );
 use Tickit::StringPos;
 use Tickit::Rect;
+use Tickit::Pen;
 
 # Exported API constants
 use Exporter 'import';
@@ -124,15 +126,54 @@ merged into the main L<Tickit> distribution, and reimplemented in efficient XS
 or C code. As such, recommendations and best-practices are still subject to
 change and evolution as the code progresses.
 
+=head2 State Stack
+
+The render context stores a stack of saved state. The state of the context can
+be stored using the C<save> method, so that changes can be made, before
+finally restoring back to that state using C<restore>. The following items of
+state are saved:
+
+=over 2
+
+=item *
+
+The virtual cursor position
+
+=item *
+
+The clipping rectangle
+
+=item *
+
+The render pen
+
+=item *
+
+The translation offset
+
+=back
+
+When the state is saved to the stack, the render pen is remembered and merged
+with any pen set using the C<setpen> method.
+
+The queued content to render is not part of the state stack. It is intended
+that the state stack be used to implement recursive delegation of drawing
+operations down a tree of code, allowing child contexts to be created by
+saving state and modifying it, to later restore it again afterwards.
+
 =cut
 
 use Struct::Dumb;
+
 struct Cell => [qw(   state  len    penidx textidx textoffs linemask )];
 sub SkipCell  { Cell( SKIP,  $_[0], 0,     0,      undef,   undef    ) }
 sub TextCell  { Cell( TEXT,  $_[0], $_[1], $_[2],  $_[3],   undef    ) }
 sub EraseCell { Cell( ERASE, $_[0], $_[1], 0,      undef,   undef    ) }
 sub ContCell  { Cell( CONT,  $_[0], 0,     0,      undef,   undef    ) }
 sub LineCell  { Cell( LINE,  1,     $_[1], 0,      undef,   $_[0]    ) }
+
+struct State => [qw( line col clip pen xlate_line xlate_col )];
+struct StatePen => [qw( pen )];
 
 =head1 CONSTRUCTOR
 
@@ -167,11 +208,11 @@ sub new
    my $self = bless {
       lines => $lines,
       cols  => $cols,
-      pens  => [],
-      texts => [],
+      pen   => undef,
+      xlate_line => 0,
+      xlate_col  => 0,
    }, $class;
 
-   $self->clip( undef );
    $self->reset;
 
    return $self;
@@ -192,14 +233,105 @@ Returns the size of the buffer area
 sub lines { shift->{lines} }
 sub cols  { shift->{cols} }
 
+sub _xlate_and_clip
+{
+   my $self = shift;
+   my ( $line, $col, $len ) = @_;
+
+   $line += $self->{xlate_line};
+   $col  += $self->{xlate_col};
+
+   my $clip = $self->{clip} or return; # undef means totally invisible
+
+   return if $line < $clip->top or
+             $line >= $clip->bottom or
+             $col >= $clip->right;
+
+   my $startcol = 0;
+   if( $col < $clip->left ) {
+      $len += $col - $clip->left;
+      $startcol -= $col - $clip->left;
+      $col = $clip->left;
+   }
+   return if $len <= 0;
+
+   if( $len > $clip->right - $col ) {
+      $len = $clip->right - $col;
+   }
+
+   return ( $line, $col, $len, $startcol );
+}
+
+=head2 $rc->save
+
+Pushes a new state-saving context to the stack, which can later be returned to
+by the C<restore> method.
+
+=cut
+
+sub save
+{
+   my $self = shift;
+
+   my $savepen = defined $self->{pen} ? Tickit::Pen::Immutable->new( $self->{pen}->getattrs )
+                                      : undef;
+
+   push @{ $self->{stack} }, State(
+      $self->{line}, $self->{col}, $self->{clip}, $savepen, $self->{xlate_line}, $self->{xlate_col},
+   );
+}
+
+=head2 $rc->savepen
+
+Pushes a new state-saving context to the stack that only stores the pen. This
+can later be returned to by the C<restore> method, but will only restore the
+pen. Other attributes such as the virtual cursor position will be unaffected.
+
+=cut
+
+sub savepen
+{
+   my $self = shift;
+
+   my $savepen = defined $self->{pen} ? Tickit::Pen::Immutable->new( $self->{pen}->getattrs )
+                                      : undef;
+
+   push @{ $self->{stack} }, StatePen( $savepen );
+}
+
+=head2 $rc->restore
+
+Pops and restores a saved state previously created with C<save>.
+
+=cut
+
+sub restore
+{
+   my $self = shift;
+
+   my $state = pop @{ $self->{stack} };
+
+   $self->{pen}  = $state->pen;
+
+   if( $state->isa( "Tickit::RenderContext::State" ) ) {
+      $self->{line} = $state->line;
+      $self->{col}  = $state->col;
+      $self->{clip} = $state->clip;
+      $self->{xlate_line} = $state->xlate_line;
+      $self->{xlate_col}  = $state->xlate_col;
+   }
+}
+
 =head2 $rc->clip( $rect )
 
-Sets a L<Tickit::Rect> rectangle to clip operations to. This will apply to
-subsequent rendering operations but does not affect existing content, nor the
-actual rendering to the window. Clipping rectangles are not cumulative; each
-call sets a new rectangle, replacing the previous.
+Restricts the clipping rectangle of drawing operations to be no further than
+the limits of the given rectangle. This will apply to subsequent rendering
+operations but does not affect existing content, nor the actual rendering to
+the window.
 
-Pass C<undef> to remove the clipping rectangle.
+Clipping rectangles cumulative; each call further restricts the drawing
+region. To revert back to a larger drawing area, use the C<save> and
+C<restore> stack.
 
 =cut
 
@@ -208,26 +340,35 @@ sub clip
    my $self = shift;
    my ( $rect ) = @_;
 
-   my $top    = 0; $top    = $rect->top    if $rect and $rect->top    > $top;
-   my $left   = 0; $left   = $rect->left   if $rect and $rect->left   > $left;
+   # $self->{clip} is always in output coordinates
 
-   my $bottom = $self->lines; $bottom = $rect->bottom if $rect and $rect->bottom < $bottom;
-   my $right  = $self->cols;  $right  = $rect->right  if $rect and $rect->right  < $right;
+   $self->{clip} = $self->{clip}->intersect( $rect->translate( $self->{xlate_line}, $self->{xlate_col} ) );
 
-   $self->{clip} = Tickit::Rect->new(
-      top    => $top,
-      left   => $left,
-      bottom => $bottom,
-      right  => $right,
-   );
+   # There's a chance clip is now undef; but that's OK - that means we're totally invisible
+}
+
+=head2 $rc->translate( $downward, $rightward )
+
+Applies a translation to the coordinate system used by C<goto> and the
+absolute-position methods C<*_at>. After this call, all positions used will be
+offset by the given amount.
+
+=cut
+
+sub translate
+{
+   my $self = shift;
+   my ( $downward, $rightward ) = @_;
+
+   $self->{xlate_line} += $downward;
+   $self->{xlate_col}  += $rightward;
 }
 
 =head2 $rc->reset
 
 Removes any pending changes and reverts the render context to its default
-empty state, and undefines the virtual cursor position.
-
-This method does not change the clipping rectangle.
+empty state. Undefines the virtual cursor position, resets the clipping
+rectangle, and clears the stack of saved state.
 
 =cut
 
@@ -242,11 +383,17 @@ sub reset
    $self->{pens} = [];
    $self->{texts} = [];
 
+   $self->{stack} = [];
+
    undef $self->{line};
    undef $self->{col};
+
+   $self->{clip} = Tickit::Rect->new(
+      top => 0, left => 0, lines => $self->lines, cols => $self->cols,
+   );
 }
 
-sub _empty_span
+sub _make_span
 {
    my $self = shift;
    my ( $line, $col, $len ) = @_;
@@ -284,7 +431,7 @@ sub _empty_span
             $cells->[$line][$end] = EraseCell( $afterlen, $spancell->penidx );
          }
          default {
-            die "TODO: split _empty_span after in state $spanstate";
+            die "TODO: split _make_span after in state $spanstate";
          }
       }
       # We know all these are already CONT cells
@@ -298,10 +445,14 @@ sub _empty_span
             $cells->[$line][$spanstart]->len = $beforelen;
          }
          default {
-            die "TODO: split _empty_span before in state $spanstate";
+            die "TODO: split _make_span before in state $spanstate";
          }
       }
    }
+
+   $cells->[$line][$_]   = ContCell( $col ) for $col+1 .. $col+$len-1;
+
+   return $cells->[$line][$col];
 }
 
 sub _push_pen
@@ -309,9 +460,12 @@ sub _push_pen
    my $self = shift;
    my ( $pen ) = @_;
 
-   $pen->isa( "Tickit::Pen" ) or croak "Expected a pen";
+   defined $pen and $pen->isa( "Tickit::Pen" ) or croak "Expected a pen";
 
-   $self->{pens}[$_] == $pen and return $_ for 0 .. $#{ $self->{pens} };
+   # TODO: currently just care about object identity, but maybe we want to
+   # merge equivalent pens too?
+   my $penaddr = refaddr($pen);
+   refaddr($self->{pens}[$_]) == $penaddr and return $_ for 0 .. $#{ $self->{pens} };
 
    push @{ $self->{pens} }, $pen;
    return $#{ $self->{pens} };
@@ -353,6 +507,34 @@ sub goto
    @{$self}{qw( line col )} = @_;
 }
 
+=head2 $rc->setpen( $pen )
+
+Sets the rendering pen to use for C<text> and C<erase> operations. If a pen is
+set then a C<$pen> argument should no longer be supplied to the C<text> or
+C<erase> methods.
+
+Successive calls to this method will replace the active pen used, but if there
+is a saved state on the stack it will be merged with the rendering pen of the
+most recent saved state.
+
+=cut
+
+sub setpen
+{
+   my $self = shift;
+   my ( $pen ) = @_;
+
+   if( @{ $self->{stack} } and defined( my $prevpen = $self->{stack}[-1]->pen ) ) {
+      $self->{pen} = Tickit::Pen::Immutable->new( $prevpen->getattrs, $pen->getattrs );
+   }
+   elsif( defined $pen ) {
+      $self->{pen} = Tickit::Pen::Immutable->new( $pen->getattrs );
+   }
+   else {
+      undef $self->{pen};
+   }
+}
+
 =head2 $rc->skip_at( $line, $col, $len )
 
 Sets the range of cells given to a skipped state. No content will be drawn
@@ -366,18 +548,12 @@ sub skip_at
 {
    my $self = shift;
    my ( $line, $col, $len ) = @_;
+   ( $line, $col, $len ) = $self->_xlate_and_clip( $line, $col, $len ) or return;
 
-   return if $line < 0 or $line >= $self->lines or $col >= $self->cols;
-   $len += $col, $col = 0 if $col < 0;
-   return if $len <= 0;
-   $len = $self->cols - $col if $len > $self->cols - $col;
+   my $cell = $self->_make_span( $line, $col, $len );
 
-   my $cells = $self->{cells};
-
-   $self->_empty_span( $line, $col, $len );
-
-   $cells->[$line][$col] = SkipCell( $len );
-   $cells->[$line][$_]   = ContCell( $col ) for $col+1 .. $col+$len-1;
+   $cell->state = SKIP;
+   $cell->len   = $len;
 }
 
 =head2 $rc->skip( $len )
@@ -423,29 +599,18 @@ sub _text_at
 {
    my $self = shift;
    my ( $line, $col, $text, $len, $pen ) = @_;
-
-   my $clip = $self->{clip};
-
-   return if $line < $clip->top or
-             $line >= $clip->bottom or
-             $col >= $clip->right;
-
-   my $startcol = 0;
-   $len += $col - $clip->left, $startcol -= $col - $clip->left, $col = $clip->left if $col < $clip->left;
-   return if $len <= 0;
-   $len = $clip->right - $col if $len > $clip->right - $col;
-
-   my $cells = $self->{cells};
-
-   $self->_empty_span( $line, $col, $len );
+   ( $line, $col, $len, my $startcol ) = $self->_xlate_and_clip( $line, $col, $len ) or return;
 
    push @{ $self->{texts} }, $text;
    my $textidx = $#{$self->{texts}};
 
-   my $penidx = $self->_push_pen( $pen );
+   my $cell = $self->_make_span( $line, $col, $len );
 
-   $cells->[$line][$col] = TextCell( $len, $penidx, $textidx, $startcol );
-   $cells->[$line][$_]   = ContCell( $col ) for $col+1 .. $col+$len-1;
+   $cell->state    = TEXT;
+   $cell->len      = $len;
+   $cell->penidx   = $self->_push_pen( $pen );
+   $cell->textidx  = $textidx;
+   $cell->textoffs = $startcol;
 }
 
 =head2 $rc->text_at( $line, $col, $text, $pen )
@@ -474,6 +639,8 @@ sub text
    my $self = shift;
    my ( $text, $pen ) = @_;
    defined $self->{line} or croak "Cannot ->text without a virtual cursor position";
+   $pen and $self->{pen} and croak "Cannot ->text with both a pen and implied pen";
+   $pen ||= $self->{pen};
    my $len = textwidth( $text );
    $self->_text_at( $self->{line}, $self->{col}, $text, $len, $pen );
    $self->{col} += $len;
@@ -489,25 +656,13 @@ sub erase_at
 {
    my $self = shift;
    my ( $line, $col, $len, $pen ) = @_;
+   ( $line, $col, $len ) = $self->_xlate_and_clip( $line, $col, $len ) or return;
 
-   my $clip = $self->{clip};
+   my $cell = $self->_make_span( $line, $col, $len );
 
-   return if $line < $clip->top or
-             $line >= $clip->bottom or
-             $col >= $clip->right;
-
-   $len += $col - $clip->left, $col = $clip->left if $col < $clip->left;
-   return if $len <= 0;
-   $len = $clip->right - $col if $len > $clip->right - $col;
-
-   my $cells = $self->{cells};
-
-   $self->_empty_span( $line, $col, $len );
-
-   my $penidx = $self->_push_pen( $pen );
-
-   $cells->[$line][$col] = EraseCell( $len, $penidx );
-   $cells->[$line][$_]   = ContCell( $col ) for $col+1 .. $col+$len-1;
+   $cell->state  = ERASE;
+   $cell->len    = $len;
+   $cell->penidx = $self->_push_pen( $pen );
 }
 
 =head2 $rc->erase( $len, $pen )
@@ -522,6 +677,8 @@ sub erase
    my $self = shift;
    my ( $len, $pen ) = @_;
    defined $self->{line} or croak "Cannot ->erase without a virtual cursor position";
+   $pen and $self->{pen} and croak "Cannot ->erase with both a pen and implied pen";
+   $pen ||= $self->{pen};
    $self->erase_at( $self->{line}, $self->{col}, $len, $pen );
    $self->{col} += $len;
 }
@@ -542,6 +699,8 @@ sub erase_to
    my $self = shift;
    my ( $col, $pen ) = @_;
    defined $self->{line} or croak "Cannot ->erase_to without a virtual cursor position";
+   $pen and $self->{pen} and croak "Cannot ->erase_to with both a pen and implied pen";
+   $pen ||= $self->{pen};
 
    if( $self->{col} < $col ) {
       $self->erase_at( $self->{line}, $self->{col}, $col - $self->{col}, $pen );
@@ -676,6 +835,8 @@ my @linechars;
       $linechars[$mask] = $char;
    }
 
+   close DATA;
+
    # Fill in the gaps
    foreach my $mask ( 1 .. 255 ) {
       next if defined $linechars[$mask];
@@ -713,20 +874,16 @@ sub linecell
 {
    my $self = shift;
    my ( $line, $col, $bits, $pen ) = @_;
-
-   my $clip = $self->{clip};
-
-   return if $line < $clip->top or
-             $line >= $clip->bottom or
-             $col < $clip->left or
-             $col >= $clip->right;
+   ( $line, $col ) = $self->_xlate_and_clip( $line, $col, 1 ) or return;
 
    my $penidx = $self->_push_pen( $pen );
 
    my $cell = $self->{cells}[$line][$col];
    if( $cell->state != LINE ) {
-      $self->_empty_span( $line, $col, 1 );
-      $cell = $self->{cells}[$line][$col] = LineCell( 0, $penidx );
+      $self->_make_span( $line, $col, 1 );
+      $cell->state  = LINE;
+      $cell->len    = 1;
+      $cell->penidx = $penidx;
    }
 
    if( $cell->penidx != $penidx ) {
@@ -751,7 +908,7 @@ sub hline_at
    my ( $line, $startcol, $endcol, $style, $pen, $caps ) = @_;
    $caps ||= 0;
 
-   # TODO: _empty_span first for efficiency
+   # TODO: _make_span first for efficiency
    my $east = $style << EAST_SHIFT;
    my $west = $style << WEST_SHIFT;
 
@@ -820,13 +977,13 @@ sub render_to_window
             }
             when( ERASE ) {
                my $pen = $self->{pens}[$cell->penidx];
-               if( $col + $cell->len < $self->cols ) {
-                  $phycol += $win->erasech( $cell->len, 1, $pen )->columns;
-               }
-               else {
-                  $win->erasech( $cell->len, undef, $pen );
-                  undef $phycol;
-               }
+               # No need to set moveend=true to erasech unless we actually
+               # have more content;
+               my $moveend = $col + $cell->len < $self->cols &&
+                             $cells->[$line][$col + $cell->len]->state != SKIP;
+
+               $phycol += $win->erasech( $cell->len, $moveend || undef, $pen )->columns;
+               undef $phycol unless $moveend;
             }
             when( LINE ) {
                # This is more efficient and works better with unit testing in
@@ -871,11 +1028,6 @@ currently lacks:
 A C<char_at> method to store a single Unicode character more effiicently than
 a 1-column text cell. This may be useful for drawing characters such as arrows
 and tick-marks.
-
-=item *
-
-Consider if the virtual-cursor methods should use a stored pen rather than
-passing each time.
 
 =item *
 

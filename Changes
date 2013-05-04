@@ -1,5 +1,14 @@
 Revision history for Tickit-RenderContext
 
+0.03    CHANGES:
+         * Added ->save/->restore stack
+         * Added ->setpen and stored pen state for ->text/->erase
+         * Added ->translate
+         * Some performance improvements
+         * Declare dependence on Tickit::Utils 0.21
+         * Close DATA handle after using it, so it doesn't spam up warnings
+           and errors
+
 0.02    CHANGES:
          * Remembered to update workdir before packing distrubtion.
 

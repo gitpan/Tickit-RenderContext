@@ -9,7 +9,11 @@ META.json
 META.yml
 README
 t/00use.t
-t/01rc.t
-t/02clipping.t
+t/01text.t
+t/02erase.t
 t/03line.t
+t/04skip.t
+t/10clipping.t
+t/11stack.t
 t/99pod.t
+t/TestWindow.pm

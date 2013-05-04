@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Test::More;
+use t::TestWindow qw( $win @methods );
 
 use Tickit::RenderContext;
 
@@ -14,21 +15,6 @@ my $rc = Tickit::RenderContext->new(
    lines => 10,
    cols  => 20,
 );
-
-my @methods;
-{
-   package TestWindow;
-   use Tickit::Utils qw( string_count );
-   use Tickit::StringPos;
-
-   sub goto { shift; push @methods, [ goto => @_ ] }
-   sub print { shift; push @methods, [ print => $_[0], { $_[1]->getattrs } ];
-               string_count( $_[0], my $pos = Tickit::StringPos->zero );
-               return $pos; }
-   sub erasech { shift; push @methods, [ erasech => $_[0], $_[1], { $_[2]->getattrs } ];
-               return Tickit::StringPos->limit_columns( $_[0] ); }
-}
-my $win = bless [], "TestWindow";
 
 # Clipping to edge
 {
@@ -59,7 +45,7 @@ my $win = bless [], "TestWindow";
    is_deeply( \@methods,
               [
                  [ goto => 4, 0 ],
-                 [ erasech => 7, 1,     { fg => 3 } ], # TODO: this 1 should not be here
+                 [ erasech => 7, undef, { fg => 3 } ],
                  [ goto => 5, 15 ],
                  [ erasech => 5, undef, { fg => 4 } ],
               ],
@@ -94,6 +80,13 @@ my $win = bless [], "TestWindow";
               'RC text rendering with clipping' );
    undef @methods;
 
+   $rc->clip( Tickit::Rect->new(
+         top => 2,
+         left => 2,
+         bottom => 8,
+         right => 18
+   ) );
+
    $rc->erase_at( 1, 5, 10, Tickit::Pen->new( fg => 1 ) );
    $rc->erase_at( 9, 5, 10, Tickit::Pen->new( fg => 2 ) );
    $rc->erase_at( 4, -3, 10, Tickit::Pen->new( fg => 3 ) );
@@ -103,12 +96,41 @@ my $win = bless [], "TestWindow";
    is_deeply( \@methods,
               [
                  [ goto => 4, 2 ],
-                 [ erasech => 5, 1, { fg => 3 } ], # TODO: this 1 should not be here
+                 [ erasech => 5, undef, { fg => 3 } ],
                  [ goto => 5, 15 ],
-                 [ erasech => 3, 1, { fg => 4 } ],
+                 [ erasech => 3, undef, { fg => 4 } ],
               ],
               'RC text rendering with clipping' );
    undef @methods;
+}
+
+# clipping with translation
+{
+   $rc->translate( 3, 5 );
+
+   $rc->clip( Tickit::Rect->new(
+         top   => 2,
+         left  => 2,
+         lines => 3,
+         cols  => 5
+   ) );
+
+   $rc->text_at( $_, 0, "$_"x10, Tickit::Pen->new ) for 0 .. 8;
+
+   $rc->render_to_window( $win );
+   is_deeply( \@methods,
+              [
+                 [ goto => 5, 7 ],
+                 [ print => "22222", {} ],
+                 [ goto => 6, 7 ],
+                 [ print => "33333", {} ],
+                 [ goto => 7, 7 ],
+                 [ print => "44444", {} ],
+              ],
+              'RC clipping rectangle translated' );
+   undef @methods;
+
+   $rc->translate( -3, -5 );
 }
 
 done_testing;

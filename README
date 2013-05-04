@@ -59,6 +59,29 @@ DESCRIPTION
     efficient XS or C code. As such, recommendations and best-practices are
     still subject to change and evolution as the code progresses.
 
+  State Stack
+    The render context stores a stack of saved state. The state of the
+    context can be stored using the `save' method, so that changes can be
+    made, before finally restoring back to that state using `restore'. The
+    following items of state are saved:
+
+    * The virtual cursor position
+
+    * The clipping rectangle
+
+    * The render pen
+
+    * The translation offset
+
+    When the state is saved to the stack, the render pen is remembered and
+    merged with any pen set using the `setpen' method.
+
+    The queued content to render is not part of the state stack. It is
+    intended that the state stack be used to implement recursive delegation
+    of drawing operations down a tree of code, allowing child contexts to be
+    created by saving state and modifying it, to later restore it again
+    afterwards.
+
 CONSTRUCTOR
   $rc = Tickit::RenderContext->new( %args )
     Returns a new instance of a `Tickit::RenderContext'.
@@ -74,19 +97,38 @@ METHODS
   $cols = $rc->cols
     Returns the size of the buffer area
 
-  $rc->clip( $rect )
-    Sets a Tickit::Rect rectangle to clip operations to. This will apply to
-    subsequent rendering operations but does not affect existing content,
-    nor the actual rendering to the window. Clipping rectangles are not
-    cumulative; each call sets a new rectangle, replacing the previous.
+  $rc->save
+    Pushes a new state-saving context to the stack, which can later be
+    returned to by the `restore' method.
 
-    Pass `undef' to remove the clipping rectangle.
+  $rc->savepen
+    Pushes a new state-saving context to the stack that only stores the pen.
+    This can later be returned to by the `restore' method, but will only
+    restore the pen. Other attributes such as the virtual cursor position
+    will be unaffected.
+
+  $rc->restore
+    Pops and restores a saved state previously created with `save'.
+
+  $rc->clip( $rect )
+    Restricts the clipping rectangle of drawing operations to be no further
+    than the limits of the given rectangle. This will apply to subsequent
+    rendering operations but does not affect existing content, nor the
+    actual rendering to the window.
+
+    Clipping rectangles cumulative; each call further restricts the drawing
+    region. To revert back to a larger drawing area, use the `save' and
+    `restore' stack.
+
+  $rc->translate( $downward, $rightward )
+    Applies a translation to the coordinate system used by `goto' and the
+    absolute-position methods `*_at'. After this call, all positions used
+    will be offset by the given amount.
 
   $rc->reset
     Removes any pending changes and reverts the render context to its
-    default empty state, and undefines the virtual cursor position.
-
-    This method does not change the clipping rectangle.
+    default empty state. Undefines the virtual cursor position, resets the
+    clipping rectangle, and clears the stack of saved state.
 
   $rc->clear( $pen )
     Resets every cell in the buffer to an erased state. A shortcut to
@@ -94,6 +136,15 @@ METHODS
 
   $rc->goto( $line, $col )
     Sets the position of the virtual cursor.
+
+  $rc->setpen( $pen )
+    Sets the rendering pen to use for `text' and `erase' operations. If a
+    pen is set then a `$pen' argument should no longer be supplied to the
+    `text' or `erase' methods.
+
+    Successive calls to this method will replace the active pen used, but if
+    there is a saved state on the stack it will be merged with the rendering
+    pen of the most recent saved state.
 
   $rc->skip_at( $line, $col, $len )
     Sets the range of cells given to a skipped state. No content will be
@@ -220,9 +271,6 @@ TODO
     * A `char_at' method to store a single Unicode character more
       effiicently than a 1-column text cell. This may be useful for drawing
       characters such as arrows and tick-marks.
-
-    * Consider if the virtual-cursor methods should use a stored pen rather
-      than passing each time.
 
     * Hole regions, to directly support shadows made by floating windows.
 
