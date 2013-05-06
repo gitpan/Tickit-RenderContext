@@ -1,5 +1,11 @@
 Revision history for Tickit-RenderContext
 
+0.04    CHANGES:
+         * Store immutable pens directly rather than using a list and storing
+           indices
+         * Slight efficiency improvement for line segments
+         * Bugfix to rendering on invisible windows
+
 0.03    CHANGES:
          * Added ->save/->restore stack
          * Added ->setpen and stored pen state for ->text/->erase

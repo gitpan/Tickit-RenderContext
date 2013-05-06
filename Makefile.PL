@@ -7,7 +7,7 @@ WriteMakefile
   'VERSION_FROM' => 'lib/Tickit/RenderContext.pm',
   'PREREQ_PM' => {
                    'Test::More' => '0.88',
-                   'Tickit::Pen' => '0.29',
+                   'Tickit::Pen' => '0.31',
                    'Tickit::Utils' => '0.21'
                  },
   'INSTALLDIRS' => 'site',

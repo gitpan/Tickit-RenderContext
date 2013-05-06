@@ -21,7 +21,7 @@
       },
       "runtime" : {
          "requires" : {
-            "Tickit::Pen" : "0.29",
+            "Tickit::Pen" : "0.31",
             "Tickit::Utils" : "0.21",
             "perl" : "5.010"
          }
@@ -30,7 +30,7 @@
    "provides" : {
       "Tickit::RenderContext" : {
          "file" : "lib/Tickit/RenderContext.pm",
-         "version" : "0.03"
+         "version" : "0.04"
       }
    },
    "release_status" : "stable",
@@ -39,5 +39,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.03"
+   "version" : "0.04"
 }

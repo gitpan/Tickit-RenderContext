@@ -9,7 +9,7 @@ use strict;
 use warnings;
 use feature qw( switch );
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use Carp;
 use Scalar::Util qw( refaddr );
@@ -17,7 +17,7 @@ use Scalar::Util qw( refaddr );
 use Tickit::Utils qw( textwidth substrwidth string_count );
 use Tickit::StringPos;
 use Tickit::Rect;
-use Tickit::Pen;
+use Tickit::Pen 0.31;
 
 # Exported API constants
 use Exporter 'import';
@@ -165,7 +165,7 @@ saving state and modifying it, to later restore it again afterwards.
 
 use Struct::Dumb;
 
-struct Cell => [qw(   state  len    penidx textidx textoffs linemask )];
+struct Cell => [qw(   state  len    pen    textidx textoffs linemask )];
 sub SkipCell  { Cell( SKIP,  $_[0], 0,     0,      undef,   undef    ) }
 sub TextCell  { Cell( TEXT,  $_[0], $_[1], $_[2],  $_[3],   undef    ) }
 sub EraseCell { Cell( ERASE, $_[0], $_[1], 0,      undef,   undef    ) }
@@ -380,7 +380,6 @@ sub reset
       [ SkipCell( $self->cols ), map { ContCell( 0 ) } 1 .. $self->cols-1 ]
    } 1 .. $self->lines ];
 
-   $self->{pens} = [];
    $self->{texts} = [];
 
    $self->{stack} = [];
@@ -425,10 +424,10 @@ sub _make_span
             string_count( $self->{texts}[$spancell->textidx],
                           my $startpos = Tickit::StringPos->zero,
                           Tickit::StringPos->limit_columns( $end - $spanstart ) );
-            $cells->[$line][$end] = TextCell( $afterlen, $spancell->penidx, $spancell->textidx, $startpos->columns );
+            $cells->[$line][$end] = TextCell( $afterlen, $spancell->pen, $spancell->textidx, $startpos->columns );
          }
          when( ERASE ) {
-            $cells->[$line][$end] = EraseCell( $afterlen, $spancell->penidx );
+            $cells->[$line][$end] = EraseCell( $afterlen, $spancell->pen );
          }
          default {
             die "TODO: split _make_span after in state $spanstate";
@@ -455,22 +454,6 @@ sub _make_span
    return $cells->[$line][$col];
 }
 
-sub _push_pen
-{
-   my $self = shift;
-   my ( $pen ) = @_;
-
-   defined $pen and $pen->isa( "Tickit::Pen" ) or croak "Expected a pen";
-
-   # TODO: currently just care about object identity, but maybe we want to
-   # merge equivalent pens too?
-   my $penaddr = refaddr($pen);
-   refaddr($self->{pens}[$_]) == $penaddr and return $_ for 0 .. $#{ $self->{pens} };
-
-   push @{ $self->{pens} }, $pen;
-   return $#{ $self->{pens} };
-}
-
 # Methods to alter cell states
 
 =head2 $rc->clear( $pen )
@@ -485,9 +468,8 @@ sub clear
    my $self = shift;
    my ( $pen ) = @_;
 
-   # Since we're about to kill all the content, we should empty the text and
-   # pen buffers first
-   undef @{ $self->{pens} };
+   # Since we're about to kill all the content, we should empty the text
+   # buffers first
    undef @{ $self->{texts} };
 
    foreach my $line ( 0 .. $self->lines - 1 ) {
@@ -608,7 +590,7 @@ sub _text_at
 
    $cell->state    = TEXT;
    $cell->len      = $len;
-   $cell->penidx   = $self->_push_pen( $pen );
+   $cell->pen      = $pen->as_immutable;
    $cell->textidx  = $textidx;
    $cell->textoffs = $startcol;
 }
@@ -660,9 +642,9 @@ sub erase_at
 
    my $cell = $self->_make_span( $line, $col, $len );
 
-   $cell->state  = ERASE;
-   $cell->len    = $len;
-   $cell->penidx = $self->_push_pen( $pen );
+   $cell->state = ERASE;
+   $cell->len   = $len;
+   $cell->pen   = $pen->as_immutable;
 }
 
 =head2 $rc->erase( $len, $pen )
@@ -876,20 +858,18 @@ sub linecell
    my ( $line, $col, $bits, $pen ) = @_;
    ( $line, $col ) = $self->_xlate_and_clip( $line, $col, 1 ) or return;
 
-   my $penidx = $self->_push_pen( $pen );
-
    my $cell = $self->{cells}[$line][$col];
    if( $cell->state != LINE ) {
       $self->_make_span( $line, $col, 1 );
-      $cell->state  = LINE;
-      $cell->len    = 1;
-      $cell->penidx = $penidx;
+      $cell->state = LINE;
+      $cell->len   = 1;
+      $cell->pen   = $pen->as_immutable;
    }
 
-   if( $cell->penidx != $penidx ) {
+   if( !$cell->pen->equiv( $pen ) ) {
       warn "Pen collision for line cell ($line,$col)\n";
       $cell->linemask = 0;
-      $cell->penidx = $penidx;
+      $cell->pen      = $pen->as_immutable;
    }
 
    $cell->linemask |= $bits;
@@ -972,34 +952,33 @@ sub render_to_window
          given( $cell->state ) {
             when( TEXT ) {
                my $text = $self->{texts}[$cell->textidx];
-               my $pen  = $self->{pens}[$cell->penidx];
-               $phycol += $win->print( substrwidth( $text, $cell->textoffs, $cell->len ), $pen )->columns;
+               $win->print( substrwidth( $text, $cell->textoffs, $cell->len ), $cell->pen );
+               $phycol += $cell->len;
             }
             when( ERASE ) {
-               my $pen = $self->{pens}[$cell->penidx];
                # No need to set moveend=true to erasech unless we actually
                # have more content;
                my $moveend = $col + $cell->len < $self->cols &&
                              $cells->[$line][$col + $cell->len]->state != SKIP;
 
-               $phycol += $win->erasech( $cell->len, $moveend || undef, $pen )->columns;
+               $win->erasech( $cell->len, $moveend || undef, $cell->pen );
+               $phycol += $cell->len;
                undef $phycol unless $moveend;
             }
             when( LINE ) {
                # This is more efficient and works better with unit testing in
                # the Perl case but in the C version this is easier just done a
                # cell at a time
-               my $penidx = $cell->penidx;
+               my $pen = $cell->pen;
                my $chars = "";
-               while( $col < $self->cols and
-                      $cell = $cells->[$line][$col] and
-                      $cell->state == LINE and
-                      $cell->penidx == $penidx ) {
+               do {
                   $chars .= $linechars[$cell->linemask];
                   $col++;
-               }
+               } while( $col < $self->cols and
+                        $cell = $cells->[$line][$col] and
+                        $cell->state == LINE and
+                        $cell->pen->equiv( $pen ) );
 
-               my $pen = $self->{pens}[$penidx];
                $phycol += $win->print( $chars, $pen )->columns;
 
                next;
