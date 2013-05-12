@@ -9,13 +9,12 @@ use strict;
 use warnings;
 use feature qw( switch );
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 use Carp;
 use Scalar::Util qw( refaddr );
 
-use Tickit::Utils qw( textwidth substrwidth string_count );
-use Tickit::StringPos;
+use Tickit::Utils qw( textwidth substrwidth );
 use Tickit::Rect;
 use Tickit::Pen 0.31;
 
@@ -43,6 +42,7 @@ use constant {
    ERASE => 2,
    CONT  => 3,
    LINE  => 4,
+   CHAR  => 5,
 };
 
 =head1 NAME
@@ -163,14 +163,10 @@ saving state and modifying it, to later restore it again afterwards.
 
 =cut
 
-use Struct::Dumb;
+require XSLoader;
+XSLoader::load( __PACKAGE__, $VERSION );
 
-struct Cell => [qw(   state  len    pen    textidx textoffs linemask )];
-sub SkipCell  { Cell( SKIP,  $_[0], 0,     0,      undef,   undef    ) }
-sub TextCell  { Cell( TEXT,  $_[0], $_[1], $_[2],  $_[3],   undef    ) }
-sub EraseCell { Cell( ERASE, $_[0], $_[1], 0,      undef,   undef    ) }
-sub ContCell  { Cell( CONT,  $_[0], 0,     0,      undef,   undef    ) }
-sub LineCell  { Cell( LINE,  1,     $_[1], 0,      undef,   $_[0]    ) }
+use Struct::Dumb;
 
 struct State => [qw( line col clip pen xlate_line xlate_col )];
 struct StatePen => [qw( pen )];
@@ -212,6 +208,7 @@ sub new
       xlate_line => 0,
       xlate_col  => 0,
    }, $class;
+   $self->_xs_new;
 
    $self->reset;
 
@@ -376,9 +373,7 @@ sub reset
 {
    my $self = shift;
 
-   $self->{cells} = [ map {
-      [ SkipCell( $self->cols ), map { ContCell( 0 ) } 1 .. $self->cols-1 ]
-   } 1 .. $self->lines ];
+   $self->_xs_reset;
 
    $self->{texts} = [];
 
@@ -390,68 +385,6 @@ sub reset
    $self->{clip} = Tickit::Rect->new(
       top => 0, left => 0, lines => $self->lines, cols => $self->cols,
    );
-}
-
-sub _make_span
-{
-   my $self = shift;
-   my ( $line, $col, $len ) = @_;
-
-   my $cells = $self->{cells};
-
-   my $spanstart;
-   if( $cells->[$line][$col]->state == CONT ) {
-      $spanstart = $cells->[$line][$col]->len; # column
-   }
-   else {
-      $spanstart = $col;
-   }
-
-   my $spancell  = $cells->[$line][$spanstart];
-   my $spanstate = $spancell->state;
-   my $spanend   = $spanstart + $spancell->len;
-
-   my $end = $col + $len;
-
-   if( $end < $spanend ) {
-      my $afterlen = $spanend - $end;
-      given( $spanstate ) {
-         when( SKIP ) {
-            $cells->[$line][$end] = SkipCell( $afterlen );
-         }
-         when( TEXT ) {
-            # TODO: This doens't handle doublewidth
-            string_count( $self->{texts}[$spancell->textidx],
-                          my $startpos = Tickit::StringPos->zero,
-                          Tickit::StringPos->limit_columns( $end - $spanstart ) );
-            $cells->[$line][$end] = TextCell( $afterlen, $spancell->pen, $spancell->textidx, $startpos->columns );
-         }
-         when( ERASE ) {
-            $cells->[$line][$end] = EraseCell( $afterlen, $spancell->pen );
-         }
-         default {
-            die "TODO: split _make_span after in state $spanstate";
-         }
-      }
-      # We know all these are already CONT cells
-      $cells->[$line][$_]->len = $end for $end+1 .. $spanend-1;
-   }
-
-   if( $col > $spanstart ) {
-      my $beforelen = $col - $spanstart;
-      given( $spanstate ) {
-         when( [SKIP, TEXT, ERASE] ) {
-            $cells->[$line][$spanstart]->len = $beforelen;
-         }
-         default {
-            die "TODO: split _make_span before in state $spanstate";
-         }
-      }
-   }
-
-   $cells->[$line][$_]   = ContCell( $col ) for $col+1 .. $col+$len-1;
-
-   return $cells->[$line][$col];
 }
 
 # Methods to alter cell states
@@ -532,10 +465,7 @@ sub skip_at
    my ( $line, $col, $len ) = @_;
    ( $line, $col, $len ) = $self->_xlate_and_clip( $line, $col, $len ) or return;
 
-   my $cell = $self->_make_span( $line, $col, $len );
-
-   $cell->state = SKIP;
-   $cell->len   = $len;
+   $self->_xs_make_span( $line, $col, $len )->SKIP()
 }
 
 =head2 $rc->skip( $len )
@@ -586,13 +516,9 @@ sub _text_at
    push @{ $self->{texts} }, $text;
    my $textidx = $#{$self->{texts}};
 
-   my $cell = $self->_make_span( $line, $col, $len );
-
-   $cell->state    = TEXT;
-   $cell->len      = $len;
-   $cell->pen      = $pen->as_immutable;
-   $cell->textidx  = $textidx;
-   $cell->textoffs = $startcol;
+   $self->_xs_make_span( $line, $col, $len )->TEXT(
+      $pen->as_immutable, $textidx, $startcol
+   );
 }
 
 =head2 $rc->text_at( $line, $col, $text, $pen )
@@ -640,11 +566,9 @@ sub erase_at
    my ( $line, $col, $len, $pen ) = @_;
    ( $line, $col, $len ) = $self->_xlate_and_clip( $line, $col, $len ) or return;
 
-   my $cell = $self->_make_span( $line, $col, $len );
-
-   $cell->state = ERASE;
-   $cell->len   = $len;
-   $cell->pen   = $pen->as_immutable;
+   $self->_xs_make_span( $line, $col, $len )->ERASE(
+      $pen->as_immutable
+   );
 }
 
 =head2 $rc->erase( $len, $pen )
@@ -858,21 +782,17 @@ sub linecell
    my ( $line, $col, $bits, $pen ) = @_;
    ( $line, $col ) = $self->_xlate_and_clip( $line, $col, 1 ) or return;
 
-   my $cell = $self->{cells}[$line][$col];
+   my $cell = $self->_xs_getcell( $line, $col );
    if( $cell->state != LINE ) {
-      $self->_make_span( $line, $col, 1 );
-      $cell->state = LINE;
-      $cell->len   = 1;
-      $cell->pen   = $pen->as_immutable;
+      $self->_xs_make_span( $line, $col, 1 )->LINE( $pen->as_immutable );
    }
 
    if( !$cell->pen->equiv( $pen ) ) {
       warn "Pen collision for line cell ($line,$col)\n";
-      $cell->linemask = 0;
-      $cell->pen      = $pen->as_immutable;
+      $cell->LINE( $pen->as_immutable );
    }
 
-   $cell->linemask |= $bits;
+   $cell->LINE_more( $bits );
 }
 
 =head2 $rc->hline_at( $line, $startcol, $endcol, $style, $pen, $caps )
@@ -888,7 +808,7 @@ sub hline_at
    my ( $line, $startcol, $endcol, $style, $pen, $caps ) = @_;
    $caps ||= 0;
 
-   # TODO: _make_span first for efficiency
+   # TODO: _xs_make_span first for efficiency
    my $east = $style << EAST_SHIFT;
    my $west = $style << WEST_SHIFT;
 
@@ -922,6 +842,27 @@ sub vline_at
    $self->linecell( $endline, $col, $north | ($caps & CAP_END ? $south : 0), $pen );
 }
 
+=head2 $rc->char_at( $line, $col, $codepoint, $pen )
+
+Sets the given cell to render the given Unicode character (as given by
+codepoint number, not character string) in the given pen.
+
+While this is also achieveable by the C<text_at> method, this method is
+implemented without storing a text segment, so can be more efficient than many
+single-column wide C<text_at> calls. It will also be more efficient in the C
+library rewrite.
+
+=cut
+
+sub char_at
+{
+   my $self = shift;
+   my ( $line, $col, $codepoint, $pen ) = @_;
+   ( $line, $col ) = $self->_xlate_and_clip( $line, $col, 1 ) or return;
+
+   $self->_xs_make_span( $line, $col, 1 )->CHAR( $codepoint, $pen->as_immutable );
+}
+
 =head2 $rc->render_to_window( $win )
 
 Renders the stored content to the given L<Tickit::Window>. After this, the
@@ -934,13 +875,11 @@ sub render_to_window
    my $self = shift;
    my ( $win ) = @_;
 
-   my $cells = $self->{cells};
-
    foreach my $line ( 0 .. $self->lines-1 ) {
       my $phycol;
 
       for ( my $col = 0; $col < $self->cols ; ) {
-         my $cell = $cells->[$line][$col];
+         my $cell = $self->_xs_getcell( $line, $col );
 
          $col += $cell->len, next if $cell->state == SKIP;
 
@@ -959,7 +898,7 @@ sub render_to_window
                # No need to set moveend=true to erasech unless we actually
                # have more content;
                my $moveend = $col + $cell->len < $self->cols &&
-                             $cells->[$line][$col + $cell->len]->state != SKIP;
+                             $self->_xs_getcell( $line, $col + $cell->len )->state != SKIP;
 
                $win->erasech( $cell->len, $moveend || undef, $cell->pen );
                $phycol += $cell->len;
@@ -975,13 +914,17 @@ sub render_to_window
                   $chars .= $linechars[$cell->linemask];
                   $col++;
                } while( $col < $self->cols and
-                        $cell = $cells->[$line][$col] and
+                        $cell = $self->_xs_getcell( $line, $col ) and
                         $cell->state == LINE and
                         $cell->pen->equiv( $pen ) );
 
                $phycol += $win->print( $chars, $pen )->columns;
 
                next;
+            }
+            when( CHAR ) {
+               $win->print( chr $cell->codepoint, $cell->pen );
+               $phycol += $cell->len;
             }
             default {
                die "TODO: cell in state ". $cell->state;
@@ -1004,17 +947,7 @@ currently lacks:
 
 =item *
 
-A C<char_at> method to store a single Unicode character more effiicently than
-a 1-column text cell. This may be useful for drawing characters such as arrows
-and tick-marks.
-
-=item *
-
 Hole regions, to directly support shadows made by floating windows.
-
-=item *
-
-Child contexts, to support cascading render/expose logic down a window tree.
 
 =item *
 

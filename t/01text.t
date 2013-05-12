@@ -60,6 +60,27 @@ is( $rc->cols,  20, '$rc->cols' );
               ],
               'RC renders overwritten text' );
    undef @methods;
+
+   my $pen = Tickit::Pen->new;
+   $rc->text_at( 0, 0, "abcdefghijkl", $pen );
+   $rc->text_at( 0, $_, "-", $pen ) for 2, 4, 6, 8;
+
+   $rc->render_to_window( $win );
+   is_deeply( \@methods,
+              [
+                 [ goto => 0, 0 ],
+                 [ print => "ab", {} ],
+                 [ print => "-", {} ], # c
+                 [ print => "d", {} ],
+                 [ print => "-", {} ], # e
+                 [ print => "f", {} ],
+                 [ print => "-", {} ], # g
+                 [ print => "h", {} ],
+                 [ print => "-", {} ], # i
+                 [ print => "jkl", {} ],
+              ],
+              'RC renders overwritten text split chunks' );
+   undef @methods;
 }
 
 # text VC explicit pen

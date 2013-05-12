@@ -3,6 +3,7 @@ abstract: 'efficiently render text and linedrawing on'
 author:
   - 'Paul Evans <leonerd@leonerd.org.uk>'
 build_requires:
+  ExtUtils::CBuilder: 0
   Test::More: 0.88
 dynamic_config: 1
 generated_by: 'Module::Build version 0.4001, CPAN::Meta::Converter version 2.120921'
@@ -14,11 +15,11 @@ name: Tickit-RenderContext
 provides:
   Tickit::RenderContext:
     file: lib/Tickit/RenderContext.pm
-    version: 0.04
+    version: 0.05
 requires:
   Tickit::Pen: 0.31
   Tickit::Utils: 0.21
   perl: 5.010
 resources:
   license: http://dev.perl.org/licenses/
-version: 0.04
+version: 0.05

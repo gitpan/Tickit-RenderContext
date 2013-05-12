@@ -260,6 +260,15 @@ LINE DRAWING
     Draws a vertical line between the centres of the given lines (both are
     inclusive), in the given line style, with the given pen.
 
+  $rc->char_at( $line, $col, $codepoint, $pen )
+    Sets the given cell to render the given Unicode character (as given by
+    codepoint number, not character string) in the given pen.
+
+    While this is also achieveable by the `text_at' method, this method is
+    implemented without storing a text segment, so can be more efficient
+    than many single-column wide `text_at' calls. It will also be more
+    efficient in the C library rewrite.
+
   $rc->render_to_window( $win )
     Renders the stored content to the given Tickit::Window. After this, the
     context will be cleared and reset back to initial state.
@@ -268,14 +277,7 @@ TODO
     As this code is still experimental, there are many planned features it
     currently lacks:
 
-    * A `char_at' method to store a single Unicode character more
-      effiicently than a 1-column text cell. This may be useful for drawing
-      characters such as arrows and tick-marks.
-
     * Hole regions, to directly support shadows made by floating windows.
-
-    * Child contexts, to support cascading render/expose logic down a window
-      tree.
 
     * Direct rendering to a Tickit::Term instead of a Window.
 

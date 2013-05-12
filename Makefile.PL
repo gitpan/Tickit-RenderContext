@@ -6,6 +6,7 @@ WriteMakefile
   'NAME' => 'Tickit::RenderContext',
   'VERSION_FROM' => 'lib/Tickit/RenderContext.pm',
   'PREREQ_PM' => {
+                   'ExtUtils::CBuilder' => 0,
                    'Test::More' => '0.88',
                    'Tickit::Pen' => '0.31',
                    'Tickit::Utils' => '0.21'

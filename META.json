@@ -16,6 +16,7 @@
    "prereqs" : {
       "build" : {
          "requires" : {
+            "ExtUtils::CBuilder" : "0",
             "Test::More" : "0.88"
          }
       },
@@ -30,7 +31,7 @@
    "provides" : {
       "Tickit::RenderContext" : {
          "file" : "lib/Tickit/RenderContext.pm",
-         "version" : "0.04"
+         "version" : "0.05"
       }
    },
    "release_status" : "stable",
@@ -39,5 +40,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.04"
+   "version" : "0.05"
 }

@@ -1,5 +1,10 @@
 Revision history for Tickit-RenderContext
 
+0.05    CHANGES:
+         * Added ->char_at
+         * Store cell grid in XS/C code for much improved performance
+         * Bugfix to span creation that cuts a TEXT span multiple times
+
 0.04    CHANGES:
          * Store immutable pens directly rather than using a list and storing
            indices
