@@ -2,6 +2,7 @@ Build.PL
 Changes
 examples/demo-lines.pl
 lib/Tickit/RenderContext.pm
+lib/Tickit/RenderContext.xs
 LICENSE
 Makefile.PL
 MANIFEST			This list of files
@@ -13,6 +14,7 @@ t/01text.t
 t/02erase.t
 t/03line.t
 t/04skip.t
+t/05char.t
 t/10clipping.t
 t/11stack.t
 t/99pod.t

@@ -1,5 +1,9 @@
 Revision history for Tickit-RenderContext
 
+0.06    BUGFIXES:
+         * Declare 'small' rather than 'traditional' Makefile.PL
+         * Remember to add .xs file to MANIFEST
+
 0.05    CHANGES:
          * Added ->char_at
          * Store cell grid in XS/C code for much improved performance

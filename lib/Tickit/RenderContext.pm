@@ -9,7 +9,7 @@ use strict;
 use warnings;
 use feature qw( switch );
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 use Carp;
 use Scalar::Util qw( refaddr );
