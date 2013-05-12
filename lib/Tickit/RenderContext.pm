@@ -9,7 +9,7 @@ use strict;
 use warnings;
 use feature qw( switch );
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 use Carp;
 use Scalar::Util qw( refaddr );
@@ -69,7 +69,7 @@ L<Tickit> windows
 
     $rc->text_at( 2, 2, "Hello, world!", $self->pen );
 
-    $rc->render_to_window( $win );
+    $rc->flush_to_window( $win );
  }
 
 =head1 DESCRIPTION
@@ -284,6 +284,10 @@ Pushes a new state-saving context to the stack that only stores the pen. This
 can later be returned to by the C<restore> method, but will only restore the
 pen. Other attributes such as the virtual cursor position will be unaffected.
 
+This may be more efficient for rendering runs of text in a different pen, than
+multiple calls to C<text> or C<erase> using the same pen. For a single call it
+is better just to pass a different pen directly.
+
 =cut
 
 sub savepen
@@ -424,15 +428,32 @@ sub goto
 
 =head2 $rc->setpen( $pen )
 
-Sets the rendering pen to use for C<text> and C<erase> operations. If a pen is
-set then a C<$pen> argument should no longer be supplied to the C<text> or
-C<erase> methods.
+Sets the rendering pen to use for drawing operations. If a pen is set then a
+C<$pen> argument is optional to any of the drawing methods. If a pen argument
+is supplied as well as having a stored pen, then the attributes are merged,
+with the directly-applied pen taking precedence.
 
 Successive calls to this method will replace the active pen used, but if there
 is a saved state on the stack it will be merged with the rendering pen of the
 most recent saved state.
 
+This method may be preferrable to passing pens into multiple C<text> or
+C<erase> calls as it may be more efficient than merging the same pen on every
+call. If the original pen is still required afterwards, the C<savepen> /
+C<restore> pair may be useful.
+
 =cut
+
+sub _merge_pen
+{
+   my $self = shift;
+   my ( $direct_pen ) = @_;
+
+   return $self->{pen} unless $direct_pen;
+   return $direct_pen unless $self->{pen};
+
+   return $direct_pen->clone->default_from( $self->{pen} );
+}
 
 sub setpen
 {
@@ -512,6 +533,7 @@ sub _text_at
    my $self = shift;
    my ( $line, $col, $text, $len, $pen ) = @_;
    ( $line, $col, $len, my $startcol ) = $self->_xlate_and_clip( $line, $col, $len ) or return;
+   $pen = $self->_merge_pen( $pen );
 
    push @{ $self->{texts} }, $text;
    my $textidx = $#{$self->{texts}};
@@ -547,8 +569,6 @@ sub text
    my $self = shift;
    my ( $text, $pen ) = @_;
    defined $self->{line} or croak "Cannot ->text without a virtual cursor position";
-   $pen and $self->{pen} and croak "Cannot ->text with both a pen and implied pen";
-   $pen ||= $self->{pen};
    my $len = textwidth( $text );
    $self->_text_at( $self->{line}, $self->{col}, $text, $len, $pen );
    $self->{col} += $len;
@@ -565,6 +585,7 @@ sub erase_at
    my $self = shift;
    my ( $line, $col, $len, $pen ) = @_;
    ( $line, $col, $len ) = $self->_xlate_and_clip( $line, $col, $len ) or return;
+   $pen = $self->_merge_pen( $pen );
 
    $self->_xs_make_span( $line, $col, $len )->ERASE(
       $pen->as_immutable
@@ -583,8 +604,6 @@ sub erase
    my $self = shift;
    my ( $len, $pen ) = @_;
    defined $self->{line} or croak "Cannot ->erase without a virtual cursor position";
-   $pen and $self->{pen} and croak "Cannot ->erase with both a pen and implied pen";
-   $pen ||= $self->{pen};
    $self->erase_at( $self->{line}, $self->{col}, $len, $pen );
    $self->{col} += $len;
 }
@@ -605,8 +624,6 @@ sub erase_to
    my $self = shift;
    my ( $col, $pen ) = @_;
    defined $self->{line} or croak "Cannot ->erase_to without a virtual cursor position";
-   $pen and $self->{pen} and croak "Cannot ->erase_to with both a pen and implied pen";
-   $pen ||= $self->{pen};
 
    if( $self->{col} < $col ) {
       $self->erase_at( $self->{line}, $self->{col}, $col - $self->{col}, $pen );
@@ -731,6 +748,7 @@ use constant {
 
 my @linechars;
 {
+   local $_;
    while( <DATA> ) {
       chomp;
       my ( $char, $spec ) = split( m/\s+=>\s+/, $_, 2 );
@@ -806,6 +824,7 @@ sub hline_at
 {
    my $self = shift;
    my ( $line, $startcol, $endcol, $style, $pen, $caps ) = @_;
+   $pen = $self->_merge_pen( $pen );
    $caps ||= 0;
 
    # TODO: _xs_make_span first for efficiency
@@ -830,6 +849,7 @@ sub vline_at
 {
    my $self = shift;
    my ( $startline, $endline, $col, $style, $pen, $caps ) = @_;
+   $pen = $self->_merge_pen( $pen );
    $caps ||= 0;
 
    my $south = $style << SOUTH_SHIFT;
@@ -859,18 +879,21 @@ sub char_at
    my $self = shift;
    my ( $line, $col, $codepoint, $pen ) = @_;
    ( $line, $col ) = $self->_xlate_and_clip( $line, $col, 1 ) or return;
+   $pen = $self->_merge_pen( $pen );
 
    $self->_xs_make_span( $line, $col, 1 )->CHAR( $codepoint, $pen->as_immutable );
 }
 
-=head2 $rc->render_to_window( $win )
+=head2 $rc->flush_to_window( $win )
 
 Renders the stored content to the given L<Tickit::Window>. After this, the
 context will be cleared and reset back to initial state.
 
 =cut
 
-sub render_to_window
+# Legacy name
+*render_to_window = \&flush_to_window;
+sub flush_to_window
 {
    my $self = shift;
    my ( $win ) = @_;

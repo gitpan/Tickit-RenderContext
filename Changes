@@ -1,5 +1,10 @@
 Revision history for Tickit-RenderContext
 
+0.07    CHANGES:
+         * Make ->line* and ->char_at methods use stored pen also
+         * Allow merging of stored and direct pens for operations
+         * Renamed ->render_to_window to ->flush_to_window
+
 0.06    BUGFIXES:
          * Declare 'small' rather than 'traditional' Makefile.PL
          * Remember to add .xs file to MANIFEST

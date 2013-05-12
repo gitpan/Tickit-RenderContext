@@ -20,7 +20,7 @@ my $rc = Tickit::RenderContext->new(
    $rc->erase_at( 0, 0, 20, Tickit::Pen->new( fg => 5 ) );
    $rc->erase_at( 0, 5, 10, Tickit::Pen->new( fg => 5, b => 1 ) );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 0, 0 ],
@@ -39,7 +39,7 @@ my $rc = Tickit::RenderContext->new(
    $rc->goto( 3, 12 );
    $rc->erase_to( 16, Tickit::Pen->new( i => 1 ) );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 2, 6 ],
@@ -59,7 +59,7 @@ my $rc = Tickit::RenderContext->new(
    $rc->setpen( Tickit::Pen->new( bg => 3 ) );
    $rc->erase( 5 );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 4, 0 ],
@@ -82,7 +82,7 @@ my $rc = Tickit::RenderContext->new(
    $rc->goto( 1, 0 );
    $rc->erase( 5, Tickit::Pen->new( bg => 2 ) );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 3, 5 ],
@@ -100,7 +100,7 @@ my $rc = Tickit::RenderContext->new(
 {
    $rc->clear( Tickit::Pen->new( bg => 3 ) );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                ( map {

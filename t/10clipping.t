@@ -25,7 +25,7 @@ my $rc = Tickit::RenderContext->new(
    $rc->text_at( 4, -3, "[LLLLLLLL]", $pen );
    $rc->text_at( 5, 15, "[RRRRRRRR]", $pen );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 4, 0 ],
@@ -41,7 +41,7 @@ my $rc = Tickit::RenderContext->new(
    $rc->erase_at( 4, -3, 10, Tickit::Pen->new( fg => 3 ) );
    $rc->erase_at( 5, 15, 10, Tickit::Pen->new( fg => 4 ) );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 4, 0 ],
@@ -69,7 +69,7 @@ my $rc = Tickit::RenderContext->new(
    $rc->text_at( 4, -3, "[LLLLLLLL]", $pen );
    $rc->text_at( 5, 15, "[RRRRRRRR]", $pen );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 4, 2 ],
@@ -92,7 +92,7 @@ my $rc = Tickit::RenderContext->new(
    $rc->erase_at( 4, -3, 10, Tickit::Pen->new( fg => 3 ) );
    $rc->erase_at( 5, 15, 10, Tickit::Pen->new( fg => 4 ) );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 4, 2 ],
@@ -117,7 +117,7 @@ my $rc = Tickit::RenderContext->new(
 
    $rc->text_at( $_, 0, "$_"x10, Tickit::Pen->new ) for 0 .. 8;
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 5, 7 ],

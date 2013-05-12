@@ -20,7 +20,7 @@ SYNOPSIS
 
         $rc->text_at( 2, 2, "Hello, world!", $self->pen );
 
-        $rc->render_to_window( $win );
+        $rc->flush_to_window( $win );
      }
 
 DESCRIPTION
@@ -107,6 +107,10 @@ METHODS
     restore the pen. Other attributes such as the virtual cursor position
     will be unaffected.
 
+    This may be more efficient for rendering runs of text in a different
+    pen, than multiple calls to `text' or `erase' using the same pen. For a
+    single call it is better just to pass a different pen directly.
+
   $rc->restore
     Pops and restores a saved state previously created with `save'.
 
@@ -138,13 +142,19 @@ METHODS
     Sets the position of the virtual cursor.
 
   $rc->setpen( $pen )
-    Sets the rendering pen to use for `text' and `erase' operations. If a
-    pen is set then a `$pen' argument should no longer be supplied to the
-    `text' or `erase' methods.
+    Sets the rendering pen to use for drawing operations. If a pen is set
+    then a `$pen' argument is optional to any of the drawing methods. If a
+    pen argument is supplied as well as having a stored pen, then the
+    attributes are merged, with the directly-applied pen taking precedence.
 
     Successive calls to this method will replace the active pen used, but if
     there is a saved state on the stack it will be merged with the rendering
     pen of the most recent saved state.
+
+    This method may be preferrable to passing pens into multiple `text' or
+    `erase' calls as it may be more efficient than merging the same pen on
+    every call. If the original pen is still required afterwards, the
+    `savepen' / `restore' pair may be useful.
 
   $rc->skip_at( $line, $col, $len )
     Sets the range of cells given to a skipped state. No content will be
@@ -269,7 +279,7 @@ LINE DRAWING
     than many single-column wide `text_at' calls. It will also be more
     efficient in the C library rewrite.
 
-  $rc->render_to_window( $win )
+  $rc->flush_to_window( $win )
     Renders the stored content to the given Tickit::Window. After this, the
     context will be cleared and reset back to initial state.
 

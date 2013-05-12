@@ -23,7 +23,7 @@ my $pen = Tickit::Pen->new;
    $rc->char_at( 5, 6, 0x42, $pen );
    $rc->char_at( 5, 7, 0x43, $pen );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 5, 5 ],
@@ -35,6 +35,29 @@ my $pen = Tickit::Pen->new;
    undef @methods;
 }
 
+# Characters setpen
+{
+   $rc->setpen( Tickit::Pen->new( fg => 6 ) );
+
+   $rc->char_at( 5, 5, 0x44 );
+   $rc->char_at( 5, 6, 0x45 );
+   $rc->char_at( 5, 7, 0x46 );
+
+   $rc->flush_to_window( $win );
+   is_deeply( \@methods,
+              [
+                 [ goto => 5, 5 ],
+                 [ print => "D", { fg => 6 } ],
+                 [ print => "E", { fg => 6 } ],
+                 [ print => "F", { fg => 6 } ],
+              ],
+              'RC renders char_at' );
+   undef @methods;
+
+   # cheating
+   $rc->setpen( undef );
+}
+
 # Characters with translation
 {
    $rc->translate( 3, 5 );
@@ -42,7 +65,7 @@ my $pen = Tickit::Pen->new;
    $rc->char_at( 1, 1, 0x31, $pen );
    $rc->char_at( 1, 2, 0x32, $pen );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 4, 6 ],

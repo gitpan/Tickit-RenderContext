@@ -23,7 +23,7 @@ my $pen = Tickit::Pen->new;
    $rc->erase_at( 7, 5, 15, $pen );
    $rc->skip_at( 7, 10, 2 );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 6, 1 ],
@@ -48,7 +48,7 @@ my $pen = Tickit::Pen->new;
    $rc->skip_to( 14 );
    $rc->text( "14", $pen );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 8, 0 ],

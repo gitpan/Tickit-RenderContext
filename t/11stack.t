@@ -32,7 +32,7 @@ my $pen = Tickit::Pen->new;
 
    $rc->text( "some text", $pen );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
 
    is_deeply( \@methods,
               [
@@ -58,7 +58,7 @@ my $pen = Tickit::Pen->new;
 
    $rc->text_at( 2, 0, "2222222222", $pen );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
 
    is_deeply( \@methods,
               [
@@ -95,7 +95,7 @@ my $pen = Tickit::Pen->new;
    }
    $rc->restore;
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
 
    is_deeply( \@methods,
               [
@@ -122,7 +122,7 @@ my $pen = Tickit::Pen->new;
 
    $rc->text_at( 2, 2, "C", $pen );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
 
    is_deeply( \@methods,
               [

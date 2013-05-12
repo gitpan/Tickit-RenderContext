@@ -22,7 +22,7 @@ is( $rc->cols,  20, '$rc->cols' );
 
 # Initially empty
 {
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
 
    is_deeply( \@methods,
               [],
@@ -33,7 +33,7 @@ is( $rc->cols,  20, '$rc->cols' );
 {
    $rc->text_at( 2, 5, "Hello, world!", Tickit::Pen->new );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
 
    is_deeply( \@methods,
               [
@@ -43,14 +43,14 @@ is( $rc->cols,  20, '$rc->cols' );
               'RC renders text' );
    undef @methods;
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods, [], 'RC now empty after render' );
    undef @methods;
 
    $rc->text_at( 3, 0, "Some long text", Tickit::Pen->new( fg => 1 ) );
    $rc->text_at( 3, 5, "more", Tickit::Pen->new( fg => 2 ) );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 3, 0 ],
@@ -65,7 +65,7 @@ is( $rc->cols,  20, '$rc->cols' );
    $rc->text_at( 0, 0, "abcdefghijkl", $pen );
    $rc->text_at( 0, $_, "-", $pen ) for 2, 4, 6, 8;
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 0, 0 ],
@@ -89,7 +89,7 @@ is( $rc->cols,  20, '$rc->cols' );
    $rc->text( "Text in ", Tickit::Pen->new );
    $rc->text( "bold", Tickit::Pen->new( b => 1 ) );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 4, 2 ],
@@ -105,15 +105,14 @@ is( $rc->cols,  20, '$rc->cols' );
    $rc->goto( 5, 0 );
    $rc->setpen( Tickit::Pen->new( i => 1 ) );
    $rc->text( "italics" );
-   $rc->setpen( Tickit::Pen->new( u => 1 ) );
-   $rc->text( " underline" );
+   $rc->text( " +underline", Tickit::Pen->new( u => 1 ) );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 5, 0 ],
                  [ print => "italics", { i => 1 } ],
-                 [ print => " underline", { u => 1 } ],
+                 [ print => " +underline", { u => 1, i => 1 } ],
               ],
               'RC renders text with implied pen' );
    undef @methods;
@@ -131,7 +130,7 @@ is( $rc->cols,  20, '$rc->cols' );
    $rc->goto( 1, 0 );
    $rc->text( "at 1,0", Tickit::Pen->new );
 
-   $rc->render_to_window( $win );
+   $rc->flush_to_window( $win );
    is_deeply( \@methods,
               [
                  [ goto => 3, 5 ],
