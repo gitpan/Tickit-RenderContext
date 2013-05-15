@@ -147,23 +147,16 @@ _xs_make_span(self,line,col,len)
   int len
   INIT:
     TickitRenderContextCell **cells;
-    int spanstart, spanend, end;
-    TickitRenderContextCell *spancell;
+    int end = col + len;
     int c;
   CODE:
     cells = (void *)SvIV(*hv_fetchs(self, "_xs_cells", 0));
 
-    if(cells[line][col].state == CONT)
-      spanstart = cells[line][col].startcol;
-    else
-      spanstart = col;
-
-    spancell = &cells[line][spanstart];
-    spanend  = spanstart + spancell->len;
-
-    end = col + len;
-
-    if(end < spanend) {
+    // If the following cell is a CONT, it needs to become a new start
+    if(cells[line][end].state == CONT) {
+      int spanstart = cells[line][end].startcol;
+      TickitRenderContextCell *spancell = &cells[line][spanstart];
+      int spanend = spanstart + spancell->len;
       int afterlen = spanend - end;
       TickitRenderContextCell *endcell = &cells[line][end];
 
@@ -194,8 +187,11 @@ _xs_make_span(self,line,col,len)
         cells[line][c].startcol = end;
     }
 
-    if(col > spanstart) {
-      int beforelen = col - spanstart;
+    // If the initial cell is a CONT, shorten its start
+    if(cells[line][col].state == CONT) {
+      int beforestart = cells[line][col].startcol;
+      TickitRenderContextCell *spancell = &cells[line][beforestart];
+      int beforelen = col - beforestart;
 
       switch(spancell->state) {
         case SKIP:

@@ -1,5 +1,9 @@
 Revision history for Tickit-RenderContext
 
+0.08    BUGFIXES:
+         * Fix _make_span splitting in begin or end overlap cases
+         * Rewritten unit tests
+
 0.07    CHANGES:
          * Make ->line* and ->char_at methods use stored pen also
          * Allow merging of stored and direct pens for operations
