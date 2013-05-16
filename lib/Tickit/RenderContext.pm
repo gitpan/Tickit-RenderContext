@@ -9,7 +9,7 @@ use strict;
 use warnings;
 use feature qw( switch );
 
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 
 use Carp;
 use Scalar::Util qw( refaddr );
@@ -213,6 +213,13 @@ sub new
    $self->reset;
 
    return $self;
+}
+
+sub DESTROY
+{
+   my $self = shift;
+
+   $self->_xs_destroy;
 }
 
 =head1 METHODS

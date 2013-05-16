@@ -76,16 +76,17 @@ _xs_new(self)
     sv_setiv(*hv_fetchs(self, "_xs_cells", 1), (IV)cells);
 
 void
-DESTROY(self)
+_xs_destroy(self)
   HV *self
   INIT:
     int lines, cols;
+    SV *cellsv;
     TickitRenderContextCell **cells;
     int line, col;
   CODE:
     lines = SvIV(*hv_fetchs(self, "lines", 0));
     cols  = SvIV(*hv_fetchs(self, "cols", 0));
-    cells = (void *)SvIV(*hv_fetchs(self, "_xs_cells", 0));
+    cells = (void *)SvIV(cellsv = *hv_fetchs(self, "_xs_cells", 0));
 
     for(line = 0; line < lines; line++) {
       for(col = 0; col < cols; col++) {
@@ -103,6 +104,7 @@ DESTROY(self)
     }
 
     Safefree(cells);
+    sv_setsv(cellsv, &PL_sv_undef);
 
 void
 _xs_reset(self)
@@ -132,6 +134,11 @@ _xs_getcell(self,line,col)
   INIT:
     TickitRenderContextCell **cells;
   CODE:
+    if(line < 0 || line >= SvIV(*hv_fetchs(self, "lines", 0)))
+      croak("$line out of range");
+    if(col < 0 || col >= SvIV(*hv_fetchs(self, "cols", 0)))
+      croak("$col out of range");
+
     cells = (void *)SvIV(*hv_fetchs(self, "_xs_cells", 0));
 
     RETVAL = newSV(0);
@@ -147,13 +154,23 @@ _xs_make_span(self,line,col,len)
   int len
   INIT:
     TickitRenderContextCell **cells;
+    int cols;
     int end = col + len;
     int c;
   CODE:
+    if(line < 0 || line >= SvIV(*hv_fetchs(self, "lines", 0)))
+      croak("$line out of range");
+    if(col < 0)
+      croak("$col out of range");
+    if(len < 1)
+      croak("$len out of range");
+    if(col + len > (cols = SvIV(*hv_fetchs(self, "cols", 0))))
+      croak("$col+$len out of range");
+
     cells = (void *)SvIV(*hv_fetchs(self, "_xs_cells", 0));
 
     // If the following cell is a CONT, it needs to become a new start
-    if(cells[line][end].state == CONT) {
+    if(end < cols && cells[line][end].state == CONT) {
       int spanstart = cells[line][end].startcol;
       TickitRenderContextCell *spancell = &cells[line][spanstart];
       int spanend = spanstart + spancell->len;
@@ -205,7 +222,8 @@ _xs_make_span(self,line,col,len)
       }
     }
 
-    for(c = col + 1; c < end; c++)
+    // cont_cell() also frees any pens in the range
+    for(c = col; c < end; c++)
       cont_cell(&cells[line][c], col);
 
     cells[line][col].len = len;
